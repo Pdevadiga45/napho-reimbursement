@@ -585,50 +585,48 @@ export default function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <a className="wordmark" href="/" aria-label="Napho Expenses home">
-          <span className="wordmark-name">Napho</span><span className="wordmark-divider">/</span><span>Expenses</span>
-        </a>
-        <div className="identity-control">
-          <span className="identity-name">{user.name}</span>
-          <button className="button button-secondary" type="button" onClick={logout} disabled={authBusy || Boolean(pendingMutation)}>{authBusy ? 'Logging out…' : 'Log out'}</button>
+        <div className="topbar-inner">
+          <a className="wordmark" href="/" aria-label="Napho Expenses home">
+            <span className="wordmark-name">Napho</span><span className="wordmark-divider">/</span><span className="wordmark-descriptor">Expenses</span>
+          </a>
+          <nav className="workspace-nav" aria-label="Workspaces">
+            <button type="button" aria-current={workspace === 'claims' ? 'page' : undefined} disabled={authBusy || Boolean(pendingMutation)} onClick={() => changeWorkspace('claims')}>My claims</button>
+            {canReview && <button type="button" aria-current={workspace === 'approvals' ? 'page' : undefined} disabled={authBusy || Boolean(pendingMutation)} onClick={() => changeWorkspace('approvals')}>Approvals</button>}
+          </nav>
+          <div className="identity-control">
+            <span className="identity-name">{user.name}</span>
+            <button className="button button-secondary" type="button" onClick={logout} disabled={authBusy || Boolean(pendingMutation)}>{authBusy ? 'Logging out…' : 'Log out'}</button>
+          </div>
         </div>
       </header>
 
       <main className="page-content">
-        <nav className="workspace-nav" aria-label="Workspaces">
-          <button type="button" aria-current={workspace === 'claims' ? 'page' : undefined} disabled={authBusy || Boolean(pendingMutation)} onClick={() => changeWorkspace('claims')}>My claims</button>
-          {canReview && <button type="button" aria-current={workspace === 'approvals' ? 'page' : undefined} disabled={authBusy || Boolean(pendingMutation)} onClick={() => changeWorkspace('approvals')}>Approvals</button>}
-        </nav>
-        <section className="page-heading" aria-labelledby="page-title">
-          <div>
-            <p className="eyebrow">REIMBURSEMENTS</p>
-            <h1 id="page-title">{workspace === 'claims' ? 'My claims' : 'Approvals'}</h1>
-            <p className="page-subtitle">{workspace === 'claims' ? 'Submit expenses and track your reimbursements.' : 'Review and process claims submitted by others.'}</p>
-          </div>
-          {workspace === 'claims' && user.permissions?.includes('create_claims') && (
-            <button className="button button-primary" type="button" onClick={startNewClaim} disabled={authBusy || Boolean(pendingMutation)}>
-              <span aria-hidden="true">＋</span> New claim
-            </button>
-          )}
-        </section>
+        <h1 className="visually-hidden">{workspace === 'claims' ? 'My claims' : 'Approvals'}</h1>
 
         {listError && <div className="banner banner-error" role="alert">{listError}</div>}
         {notice && <div className="banner banner-success" role="status">{notice}</div>}
         {conflictNotice && <div className="banner banner-warning" role="alert">{conflictNotice}</div>}
 
-        <nav className="filter-bar" aria-label="Claim status filters">
-          {(workspace === 'claims' ? MY_FILTERS : FILTERS).map((item) => (
-            <button
-              aria-pressed={filter === item.id}
-              className={`filter-button ${filter === item.id ? 'filter-active' : ''}`}
-              key={item.id}
-              type="button"
-              onClick={() => setFilter(item.id)}
-            >
-              {item.label}
+        <div className="workspace-toolbar">
+          <nav className="filter-bar" aria-label="Claim status filters">
+            {(workspace === 'claims' ? MY_FILTERS : FILTERS).map((item) => (
+              <button
+                aria-pressed={filter === item.id}
+                className={`filter-button ${filter === item.id ? 'filter-active' : ''}`}
+                key={item.id}
+                type="button"
+                onClick={() => setFilter(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+          {workspace === 'claims' && user.permissions?.includes('create_claims') && (
+            <button className="button button-primary" type="button" onClick={startNewClaim} disabled={authBusy || Boolean(pendingMutation)}>
+              <span aria-hidden="true">＋</span> New claim
             </button>
-          ))}
-        </nav>
+          )}
+        </div>
 
         <div className="workspace-grid">
           <section className="list-card" aria-labelledby="claims-list-heading">

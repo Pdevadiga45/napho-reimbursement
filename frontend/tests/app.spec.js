@@ -2,12 +2,61 @@ import { test, expect, request } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { formatRupees, parseRupees } from '../src/money.js';
 
+test('workspace chrome keeps navigation and actions in context', async ({ page }) => {
+  await page.goto('/');
+  await signIn(page, 'employee');
+  const nav = page.getByRole('navigation', { name: 'Workspaces' });
+  await expect(page.getByRole('banner').getByRole('navigation', { name: 'Workspaces' })).toHaveCount(1);
+  await expect(page.locator('main .workspace-nav')).toHaveCount(0);
+  await expect(page.getByText('REIMBURSEMENTS', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Submit expenses and track your reimbursements.')).toHaveCount(0);
+  await expect(page.getByRole('heading', { level: 1, name: 'My claims' })).toHaveCount(1);
+  await expect(page.locator('main h1')).toHaveCount(1);
+  await expect(page.locator('.list-card')).toBeVisible();
+  await expect(page.locator('.detail-card')).toBeVisible();
+  await expect(nav.getByRole('button', { name: 'Approvals' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'New claim' })).toBeVisible();
+  await switchUser(page, 'manager');
+  await expect(nav.getByRole('button', { name: 'Approvals' })).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByRole('heading', { level: 1, name: 'Approvals' })).toHaveCount(1);
+  await expect(page.getByText('Review and process claims submitted by others.')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'New claim' })).toHaveCount(0);
+  await nav.getByRole('button', { name: 'My claims' }).click();
+  await expect(nav.getByRole('button', { name: 'My claims' })).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByRole('button', { name: 'New claim' })).toBeVisible();
+});
+
+for (const width of [320, 390]) {
+  test(`mobile workspace chrome fits at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto('/');
+    await signIn(page, 'manager');
+    const header = page.getByRole('banner');
+    await expect(header.getByText('Manager One')).toBeVisible();
+    const brand = await header.getByRole('link', { name: 'Napho Expenses home' }).boundingBox();
+    const identity = await header.locator('.identity-control').boundingBox();
+    const nav = await header.getByRole('navigation', { name: 'Workspaces' }).boundingBox();
+    expect(brand.y).toBeLessThan(identity.y + identity.height);
+    expect(identity.y).toBeLessThan(brand.y + brand.height);
+    expect(nav.y).toBeGreaterThanOrEqual(brand.y + brand.height);
+    expect(nav.y).toBeGreaterThanOrEqual(identity.y + identity.height);
+    for (const control of [header.getByRole('button', { name: 'My claims' }), header.getByRole('button', { name: 'Approvals' }), header.getByRole('button', { name: 'Log out' }), page.getByRole('button', { name: 'New claim' })]) {
+      await expect(control).toBeVisible();
+      const box = await control.boundingBox();
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(width);
+      expect(box.height).toBeGreaterThanOrEqual(44);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  });
+}
+
 test('employee starts in My claims without approvals or view badges', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel('Username').fill('employee');
   await page.getByLabel('Password').fill('employee123');
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('heading', { name: 'My claims' })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Workspaces' }).getByRole('button', { name: 'My claims' })).toHaveAttribute('aria-current', 'page');
   await expect(page.getByRole('button', { name: 'Approvals' })).toHaveCount(0);
   await expect(page.getByText(/Employee view|Approver view/)).toHaveCount(0);
   expect((await page.request.get('/api/approvals')).status()).toBe(403);
@@ -25,7 +74,7 @@ async function signIn(page, username) {
   await page.getByLabel('Username').fill(username);
   await page.getByLabel('Password').fill(username === 'manager' ? 'manager123' : 'employee123');
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('heading', { name: 'My claims' })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Workspaces' }).getByRole('button', { name: 'My claims' })).toHaveAttribute('aria-current', 'page');
 }
 
 async function submitClaim(page) {
@@ -41,7 +90,7 @@ async function switchUser(page, username) {
   if (username === 'manager') {
     await expect(page.getByText('No claims yet')).toBeVisible();
     await page.getByRole('button', { name: 'Approvals', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Approvals' })).toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Workspaces' }).getByRole('button', { name: 'Approvals' })).toHaveAttribute('aria-current', 'page');
   }
 }
 
@@ -95,7 +144,7 @@ test('sign in, restore, log out and expire a session', async ({ page }) => {
   await signIn(page, 'employee');
   await expect(page.getByRole('heading', { name: 'Review this claim' })).toHaveCount(0);
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'My claims' })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Workspaces' }).getByRole('button', { name: 'My claims' })).toHaveAttribute('aria-current', 'page');
   await page.getByRole('button', { name: 'Log out' }).click();
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
   expect((await page.request.get('/api/claims')).status()).toBe(401);
@@ -326,7 +375,7 @@ test('approver owns claims but cannot review their own submission', async ({ pag
   expect(after.version).toBe(before.version);
   expect(after.history).toEqual(before.history);
   await page.getByRole('button', { name: 'Approvals', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Approvals' })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Workspaces' }).getByRole('button', { name: 'Approvals' })).toHaveAttribute('aria-current', 'page');
   await expect(page.getByRole('button', { name: /Approver own expense/ })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'New claim' })).toHaveCount(0);
 });
@@ -381,7 +430,7 @@ test('rapid workspace changes discard delayed real collection responses', async 
   } finally {
     release();
   }
-  await expect(page.getByRole('heading', { name: 'My claims' })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Workspaces' }).getByRole('button', { name: 'My claims' })).toHaveAttribute('aria-current', 'page');
   await expect(page.getByRole('button', { name: ownTitle })).toBeVisible();
   await expect(page.getByRole('button', { name: otherTitle })).toHaveCount(0);
   await page.unroute('**/api/approvals');
