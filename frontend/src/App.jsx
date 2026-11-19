@@ -9,6 +9,12 @@ const FILTERS = [
   { id: 'PAID', label: 'Paid' },
   { id: 'REVIEWED', label: 'Reviewed history' },
 ];
+const MY_FILTERS = [
+  { id: 'ALL', label: 'All claims' },
+  { id: 'DRAFT', label: 'Drafts' },
+  { id: 'SUBMITTED', label: 'Submitted' },
+  ...FILTERS.slice(2, 5),
+];
 
 const STATUS_LABELS = {
   DRAFT: 'Draft',
@@ -43,7 +49,7 @@ async function api(path, userId, options = {}) {
   if (response.status === 204) return null;
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    if (response.status === 401 && path.startsWith('/api/claims')) window.dispatchEvent(new Event('napho-session-expired'));
+    if (response.status === 401 && (path.startsWith('/api/claims') || path.startsWith('/api/approvals'))) window.dispatchEvent(new Event('napho-session-expired'));
     const error = new Error(apiErrorMessage(payload));
     error.status = response.status;
     throw error;
@@ -184,6 +190,7 @@ function History({ events }) {
 
 export default function App() {
   const [user, setUser] = useState(null);
+  const [workspace, setWorkspace] = useState('claims');
   const [authChecking, setAuthChecking] = useState(true);
   const [authBusy, setAuthBusy] = useState(false);
   const [authMessage, setAuthMessage] = useState('');
@@ -212,9 +219,11 @@ export default function App() {
   const creationKey = useRef(null);
 
   const userId = user?.id ?? null;
-  const isApprover = user?.role === 'APPROVER';
-  const visibleClaims = claimsUserId === userId ? claims : [];
-  const currentDetail = detailUserId === userId && detail?.id === selectedId ? detail : null;
+  const canReview = user?.permissions?.includes('review_claims');
+  const scopeKey = `${userId}:${workspace}`;
+  const visibleClaims = claimsUserId === scopeKey ? claims : [];
+  const currentDetail = detailUserId === scopeKey && detail?.id === selectedId ? detail : null;
+  const actions = currentDetail?.allowed_actions || [];
 
   useEffect(() => {
     const controller = new AbortController();
@@ -243,11 +252,11 @@ export default function App() {
     setListError('');
     setClaims([]);
     setClaimsUserId(null);
-    api('/api/claims', userId, { signal: controller.signal })
+    api(workspace === 'claims' ? '/api/claims' : '/api/approvals', userId, { signal: controller.signal })
       .then((result) => {
         if (requestId !== listRequestId.current) return;
         setClaims(result);
-        setClaimsUserId(userId);
+        setClaimsUserId(scopeKey);
         setSelectedId((current) => result.some((claim) => claim.id === current) ? current : result[0]?.id ?? null);
       })
       .catch((error) => {
@@ -260,7 +269,7 @@ export default function App() {
       controller.abort();
       listRequestId.current += 1;
     };
-  }, [userId, listRevision]);
+  }, [userId, workspace, listRevision]);
 
   useEffect(() => {
     if (userId === null || selectedId === null) {
@@ -279,7 +288,7 @@ export default function App() {
       .then((result) => {
         if (requestId !== detailRequestId.current) return;
         setDetail(result);
-        setDetailUserId(userId);
+        setDetailUserId(scopeKey);
         setApprovedAmount(rupeesInput(result.amount_paise));
         setReviewComment('');
       })
@@ -293,7 +302,7 @@ export default function App() {
       controller.abort();
       detailRequestId.current += 1;
     };
-  }, [userId, selectedId, detailRevision]);
+  }, [userId, workspace, selectedId, detailRevision]);
 
   const filteredClaims = useMemo(() => {
     if (filter === 'ALL') return visibleClaims;
@@ -499,6 +508,7 @@ export default function App() {
     detailRequestId.current += 1;
     creationKey.current = null;
     setUser(null);
+    setWorkspace('claims');
     setSelectedId(null);
     setClaims([]);
     setClaimsUserId(null);
@@ -517,6 +527,28 @@ export default function App() {
     setDetailError('');
     setNotice('');
     setConflictNotice('');
+  }
+
+  function changeWorkspace(next) {
+    if (authBusy || pendingMutation || next === workspace) return;
+    listRequestId.current += 1;
+    detailRequestId.current += 1;
+    setSelectedId(null);
+    setClaims([]);
+    setClaimsUserId(null);
+    setDetail(null);
+    setDetailUserId(null);
+    setFilter('ALL');
+    setFormMode(null);
+    setFormValues(null);
+    setFormError('');
+    setReviewComment('');
+    setApprovedAmount('');
+    setListError('');
+    setDetailError('');
+    setNotice('');
+    setConflictNotice('');
+    setWorkspace(next);
   }
 
   async function login(username, password) {
@@ -543,7 +575,6 @@ export default function App() {
     } finally { setAuthBusy(false); }
   }
 
-  const claimList = claimsUserId === userId;
   const hasPartialApproval = currentDetail?.approved_amount_paise !== null
     && currentDetail?.approved_amount_paise !== undefined
     && currentDetail.approved_amount_paise < currentDetail.amount_paise;
@@ -559,21 +590,22 @@ export default function App() {
         </a>
         <div className="identity-control">
           <span className="identity-name">{user.name}</span>
-          <span className={`role-label ${isApprover ? 'role-approver' : 'role-employee'}`}>
-            {isApprover ? 'Approver view' : 'Employee view'}
-          </span>
           <button className="button button-secondary" type="button" onClick={logout} disabled={authBusy || Boolean(pendingMutation)}>{authBusy ? 'Logging out…' : 'Log out'}</button>
         </div>
       </header>
 
       <main className="page-content">
+        <nav className="workspace-nav" aria-label="Workspaces">
+          <button type="button" aria-current={workspace === 'claims' ? 'page' : undefined} disabled={authBusy || Boolean(pendingMutation)} onClick={() => changeWorkspace('claims')}>My claims</button>
+          {canReview && <button type="button" aria-current={workspace === 'approvals' ? 'page' : undefined} disabled={authBusy || Boolean(pendingMutation)} onClick={() => changeWorkspace('approvals')}>Approvals</button>}
+        </nav>
         <section className="page-heading" aria-labelledby="page-title">
           <div>
             <p className="eyebrow">REIMBURSEMENTS</p>
-            <h1 id="page-title">Expense claims</h1>
-            <p className="page-subtitle">Create, review, and track employee expenses.</p>
+            <h1 id="page-title">{workspace === 'claims' ? 'My claims' : 'Approvals'}</h1>
+            <p className="page-subtitle">{workspace === 'claims' ? 'Submit expenses and track your reimbursements.' : 'Review and process claims submitted by others.'}</p>
           </div>
-          {!isApprover && user && (
+          {workspace === 'claims' && user.permissions?.includes('create_claims') && (
             <button className="button button-primary" type="button" onClick={startNewClaim} disabled={authBusy || Boolean(pendingMutation)}>
               <span aria-hidden="true">＋</span> New claim
             </button>
@@ -585,7 +617,7 @@ export default function App() {
         {conflictNotice && <div className="banner banner-warning" role="alert">{conflictNotice}</div>}
 
         <nav className="filter-bar" aria-label="Claim status filters">
-          {FILTERS.map((item) => (
+          {(workspace === 'claims' ? MY_FILTERS : FILTERS).map((item) => (
             <button
               aria-pressed={filter === item.id}
               className={`filter-button ${filter === item.id ? 'filter-active' : ''}`}
@@ -602,8 +634,8 @@ export default function App() {
           <section className="list-card" aria-labelledby="claims-list-heading">
             <div className="card-heading">
               <div>
-                <h2 id="claims-list-heading">{isApprover ? 'Team claims' : 'Your claims'}</h2>
-                <p>{isApprover ? 'Submitted and reviewed expenses' : 'Current and past expenses'}</p>
+                <h2 id="claims-list-heading">{workspace === 'approvals' ? 'Team claims' : 'Your claims'}</h2>
+                <p>{workspace === 'approvals' ? 'Submitted and reviewed expenses' : 'Current and past expenses'}</p>
               </div>
               <span className="count-pill" aria-label={`${filteredClaims.length} claims`}>{filteredClaims.length}</span>
             </div>
@@ -614,9 +646,9 @@ export default function App() {
             ) : visibleClaims.length === 0 ? (
               <div className="empty-state">
                 <span className="empty-mark" aria-hidden="true">—</span>
-                <h3>{isApprover ? 'No claims yet' : 'No claims yet'}</h3>
-                <p>{isApprover ? 'Submitted or reviewed claims will appear here.' : 'Create a draft to start tracking an expense.'}</p>
-                {!isApprover && <button className="button button-secondary" type="button" onClick={startNewClaim}>Create a claim</button>}
+                <h3>No claims yet</h3>
+                <p>{workspace === 'approvals' ? 'Submitted or reviewed claims will appear here.' : 'Create a draft to start tracking an expense.'}</p>
+                {workspace === 'claims' && user.permissions?.includes('create_claims') && <button className="button button-secondary" type="button" onClick={startNewClaim} disabled={authBusy || Boolean(pendingMutation)}>Create a claim</button>}
               </div>
             ) : filteredClaims.length === 0 ? (
               <div className="empty-state empty-state-compact"><p>No claims match this view.</p></div>
@@ -654,7 +686,7 @@ export default function App() {
                 </table>
               </div>
             )}
-            <p className="list-footnote">{isApprover ? 'New drafts are private; previously reviewed corrections remain accessible.' : 'Amounts are shown in Indian rupees (INR).'}</p>
+            <p className="list-footnote">{workspace === 'approvals' ? 'New drafts are private; previously reviewed corrections remain accessible.' : 'Amounts are shown in Indian rupees (INR).'}</p>
           </section>
 
           <section className="detail-card" aria-labelledby="detail-heading">
@@ -688,7 +720,7 @@ export default function App() {
                   </div>
                   <span className={`status-chip status-${currentDetail.status.toLowerCase()}`}>{STATUS_LABELS[currentDetail.status]}</span>
                 </div>
-                {isApprover && <p className="owner-line">Submitted by <strong>{currentDetail.owner_name}</strong></p>}
+                {workspace === 'approvals' && <p className="owner-line">Submitted by <strong>{currentDetail.owner_name}</strong></p>}
 
                 <div className="amount-summary">
                   <div><span>Requested</span><strong>{formatRupees(currentDetail.amount_paise)}</strong></div>
@@ -707,11 +739,12 @@ export default function App() {
 
                 {detailError && !formMode && <div className="banner banner-error detail-banner" role="alert">{detailError}</div>}
 
-                {!isApprover && currentDetail.status === 'REJECTED' && (
+                {workspace === 'claims' && currentDetail.status === 'REJECTED' && (
                   <div className="correction-note"><strong>Correction needed</strong><span>Review the approver’s comment in history, then edit and resubmit.</span></div>
                 )}
 
-                {isApprover && currentDetail.status === 'SUBMITTED' && (
+                {workspace === 'claims' && currentDetail.status === 'SUBMITTED' && <p className="readonly-hint">Another approver must review this claim.</p>}
+                {actions.includes('review') && (
                   <form className="review-panel" onSubmit={approveClaim}>
                     <h3>Review this claim</h3>
                     <label>
@@ -729,7 +762,7 @@ export default function App() {
                   </form>
                 )}
 
-                {isApprover && currentDetail.status === 'APPROVED' && (
+                {actions.includes('pay') && (
                   <div className="review-panel paid-panel">
                     <h3>Approval recorded</h3>
                     <p>The approved amount is ready to be marked as paid.</p>
@@ -737,21 +770,14 @@ export default function App() {
                   </div>
                 )}
 
-                {!isApprover && currentDetail.status === 'DRAFT' && (
+                {(actions.includes('submit') || actions.includes('edit') || actions.includes('delete')) && (
                   <div className="employee-actions">
-                    <button className="button button-primary" type="button" onClick={submitClaim} disabled={authBusy || Boolean(pendingMutation)}>{pendingMutation === 'Submitting claim' ? 'Submitting…' : 'Submit claim'}</button>
-                    <button className="button button-secondary" type="button" onClick={startEditingClaim} disabled={authBusy || Boolean(pendingMutation)}>Edit draft</button>
-                    {!currentDetail.history.some((event) => event.action === 'SUBMITTED') && <button className="button button-danger-text" type="button" onClick={deleteDraft} disabled={authBusy || Boolean(pendingMutation)}>{pendingMutation === 'Deleting draft' ? 'Deleting…' : 'Delete draft'}</button>}
+                    {actions.includes('submit') && <button className="button button-primary" type="button" onClick={submitClaim} disabled={authBusy || Boolean(pendingMutation)}>{pendingMutation === 'Submitting claim' ? 'Submitting…' : 'Submit claim'}</button>}
+                    {actions.includes('edit') && <button className="button button-secondary" type="button" onClick={startEditingClaim} disabled={authBusy || Boolean(pendingMutation)}>{currentDetail.status === 'REJECTED' ? 'Edit correction' : 'Edit draft'}</button>}
+                    {actions.includes('delete') && <button className="button button-danger-text" type="button" onClick={deleteDraft} disabled={authBusy || Boolean(pendingMutation)}>{pendingMutation === 'Deleting draft' ? 'Deleting…' : 'Delete draft'}</button>}
                   </div>
                 )}
-
-                {!isApprover && currentDetail.status === 'REJECTED' && (
-                  <div className="employee-actions">
-                    <button className="button button-secondary" type="button" onClick={startEditingClaim} disabled={authBusy || Boolean(pendingMutation)}>Edit correction</button>
-                  </div>
-                )}
-
-                {!isApprover && currentDetail.status === 'DRAFT' && <p className="readonly-hint">Once submitted, this claim is locked while it is under review.</p>}
+                {actions.includes('submit') && currentDetail.status === 'DRAFT' && <p className="readonly-hint">Once submitted, this claim is locked while it is under review.</p>}
                 <History events={currentDetail.history || []} />
               </article>
             )}

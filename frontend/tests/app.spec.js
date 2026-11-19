@@ -1,26 +1,43 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, request } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
 import { formatRupees, parseRupees } from '../src/money.js';
+
+test('employee starts in My claims without approvals or view badges', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Username').fill('employee');
+  await page.getByLabel('Password').fill('employee123');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'My claims' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Approvals' })).toHaveCount(0);
+  await expect(page.getByText(/Employee view|Approver view/)).toHaveCount(0);
+  expect((await page.request.get('/api/approvals')).status()).toBe(403);
+});
 
 test('unauthenticated visitors see sign in', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
   await expect(page.getByLabel('Username')).toBeVisible();
   await expect(page.getByLabel('Password')).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Expense claims' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'My claims' })).toHaveCount(0);
 });
 
 async function signIn(page, username) {
   await page.getByLabel('Username').fill(username);
   await page.getByLabel('Password').fill(`${username}123`);
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('heading', { name: 'Expense claims' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'My claims' })).toBeVisible();
 }
 
 async function switchUser(page, username) {
   await page.getByRole('button', { name: 'Log out' }).click();
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Expense claims' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'My claims' })).toHaveCount(0);
   await signIn(page, username);
+  if (username === 'approver') {
+    await expect(page.getByText('No claims yet')).toBeVisible();
+    await page.getByRole('button', { name: 'Approvals', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Approvals' })).toBeVisible();
+  }
 }
 
 test('pending logout prevents draft creation', async ({ page }) => {
@@ -73,7 +90,7 @@ test('sign in, restore, log out and expire a session', async ({ page }) => {
   await signIn(page, 'employee');
   await expect(page.getByRole('heading', { name: 'Review this claim' })).toHaveCount(0);
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'Expense claims' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'My claims' })).toBeVisible();
   await page.getByRole('button', { name: 'Log out' }).click();
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
   expect((await page.request.get('/api/claims')).status()).toBe(401);
@@ -171,7 +188,6 @@ test('employee and approver claim workflow', async ({ page }) => {
   await expect(page.locator('.claim-detail .status-chip.status-submitted')).toBeVisible();
 
   await switchUser(page, 'approver');
-  await expect(page.getByText('Approver view')).toBeVisible();
   await page.getByRole('button', { name: /Airport taxi/ }).click();
   await expect(page.getByRole('heading', { name: 'Review this claim' })).toBeVisible();
   await page.getByLabel('Approved amount (₹)').fill('6500');
@@ -188,7 +204,6 @@ test('employee and approver claim workflow', async ({ page }) => {
   await expect(page.getByText('Marked as paid', { exact: true })).toBeVisible();
 
   await switchUser(page, 'employee');
-  await expect(page.getByText('Employee view')).toBeVisible();
   await expect(page.locator('.claim-detail .status-chip.status-paid')).toBeVisible();
   await expect(page.getByRole('button', { name: /Airport taxi/ })).toBeVisible();
 
@@ -280,4 +295,109 @@ test('employee and approver claim workflow', async ({ page }) => {
   const refreshedClaim = await refreshed.json();
   expect(refreshedClaim.version).toBe(externallyUpdated.version);
   expect(refreshedClaim.history).toHaveLength(3);
+});
+
+test('approver owns claims but cannot review their own submission', async ({ page }) => {
+  await page.goto('/');
+  await signIn(page, 'approver');
+  await expect(page.getByText('No claims yet')).toBeVisible();
+  await page.getByRole('button', { name: 'New claim' }).click();
+  await page.getByLabel('Claim title').fill('Approver own expense');
+  await page.getByLabel('Category').fill('Travel');
+  await page.getByLabel('Expense date').fill(new Date().toISOString().slice(0, 10));
+  await page.getByLabel('Requested amount (₹)').fill('100');
+  await page.getByLabel('Description').fill('Own expense');
+  await page.getByRole('button', { name: 'Create draft' }).click();
+  await expect(page.getByRole('button', { name: 'Edit draft' })).toBeVisible();
+  const claimId = Number((await page.locator('.claim-detail .eyebrow').textContent()).match(/#(\d+)/)[1]);
+  await page.getByRole('button', { name: 'Submit claim' }).click();
+  await expect(page.getByText('Another approver must review this claim.')).toBeVisible();
+  for (const name of ['Approve claim', 'Reject claim', 'Mark as paid']) await expect(page.getByRole('button', { name })).toHaveCount(0);
+  const before = await (await page.request.get(`/api/claims/${claimId}`)).json();
+  const response = await page.request.post(`/api/claims/${claimId}/review`, { data: { version: before.version, decision: 'APPROVED', approved_amount_paise: 10000 } });
+  expect(response.status()).toBe(403);
+  const after = await (await page.request.get(`/api/claims/${claimId}`)).json();
+  expect(after.version).toBe(before.version);
+  expect(after.history).toEqual(before.history);
+  await page.getByRole('button', { name: 'Approvals', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Approvals' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Approver own expense/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'New claim' })).toHaveCount(0);
+});
+
+test('rapid workspace changes discard delayed real collection responses', async ({ page }) => {
+  await page.goto('/');
+  const suffix = randomUUID();
+  const ownTitle = `Race own ${suffix}`;
+  const otherTitle = `Race other ${suffix}`;
+  const baseURL = new URL(page.url()).origin;
+  const approverApi = await request.newContext({ baseURL });
+  const employeeApi = await request.newContext({ baseURL });
+  let ownId;
+  try {
+    for (const [context, username] of [[approverApi, 'approver'], [employeeApi, 'employee']]) {
+      const login = await context.post('/api/auth/login', { data: { username, password: `${username}123` } });
+      expect(login.ok()).toBeTruthy();
+    }
+    const createClaim = async (context, title) => {
+      const response = await context.post('/api/claims', {
+        headers: { 'Idempotency-Key': randomUUID() },
+        data: { title, category: 'Travel', description: 'Workspace race fixture', expense_date: new Date().toISOString().slice(0, 10), amount_paise: 10000 },
+      });
+      expect(response.status()).toBe(201);
+      return response.json();
+    };
+    const own = await createClaim(approverApi, ownTitle);
+    ownId = own.id;
+    const other = await createClaim(employeeApi, otherTitle);
+    const submission = await employeeApi.post(`/api/claims/${other.id}/submit`, { data: { version: other.version } });
+    expect(submission.ok()).toBeTruthy();
+  } finally {
+    await approverApi.dispose();
+    await employeeApi.dispose();
+  }
+  await signIn(page, 'approver');
+  await expect(page.getByRole('button', { name: ownTitle })).toBeVisible();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let started;
+  const requested = new Promise((resolve) => { started = resolve; });
+  await page.route('**/api/approvals', async (route) => {
+    const response = await route.fetch();
+    started();
+    await gate;
+    await route.fulfill({ response }).catch(() => {});
+  });
+  try {
+    await page.getByRole('button', { name: 'Approvals', exact: true }).click();
+    await requested;
+    await page.getByRole('button', { name: 'My claims', exact: true }).click();
+  } finally {
+    release();
+  }
+  await expect(page.getByRole('heading', { name: 'My claims' })).toBeVisible();
+  await expect(page.getByRole('button', { name: ownTitle })).toBeVisible();
+  await expect(page.getByRole('button', { name: otherTitle })).toHaveCount(0);
+  await page.unroute('**/api/approvals');
+  await page.getByRole('button', { name: 'Approvals', exact: true }).click();
+  await expect(page.getByRole('button', { name: otherTitle })).toBeVisible();
+  let releaseDetail;
+  const detailGate = new Promise((resolve) => { releaseDetail = resolve; });
+  let detailStarted;
+  const detailRequested = new Promise((resolve) => { detailStarted = resolve; });
+  await page.route(`**/api/claims/${ownId}`, async (route) => {
+    const response = await route.fetch();
+    detailStarted();
+    await detailGate;
+    await route.fulfill({ response }).catch(() => {});
+  });
+  try {
+    await page.getByRole('button', { name: 'My claims', exact: true }).click();
+    await detailRequested;
+    await page.getByRole('button', { name: 'Approvals', exact: true }).click();
+  } finally {
+    releaseDetail();
+  }
+  await expect(page.getByRole('button', { name: otherTitle })).toBeVisible();
+  await expect(page.getByRole('heading', { name: ownTitle })).toHaveCount(0);
 });

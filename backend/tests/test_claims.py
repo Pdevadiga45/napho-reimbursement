@@ -18,7 +18,7 @@ def test_auth_login_session_and_invalid_password(tmp_path):
         assert browser.get("/api/auth/me").status_code == 401
         login = browser.post("/api/auth/login", json={"username": "employee", "password": "employee123"})
         assert login.status_code == 200
-        assert login.json() == {"id": 1, "name": "Employee One", "role": "EMPLOYEE"}
+        assert login.json() == {"id": 1, "name": "Employee One", "role": "EMPLOYEE", "permissions": ["create_claims"]}
         assert "napho_session" in browser.cookies
         cookie_header = login.headers["set-cookie"].lower()
         assert "httponly" in cookie_header and "samesite=lax" in cookie_header
@@ -184,12 +184,12 @@ def test_partial_approval_and_payment_preserve_requested_amount(client: TestClie
     assert approver.patch(
         f"/api/claims/{claim_id}",
         json={**claim_payload(), "version": 1},
-    ).status_code == 403
+    ).status_code == 404
     submitted = submit_claim(client, claim_id, created["version"])
     assert submitted.status_code == 200
     assert submitted.json()["status"] == "SUBMITTED"
 
-    assert approver.get("/api/claims").json()[0]["id"] == claim_id
+    assert approver.get("/api/approvals").json()[0]["id"] == claim_id
     assert review_claim(
         client,
         claim_id,
@@ -261,7 +261,7 @@ def test_rejected_claim_edit_and_resubmit_preserve_old_snapshots(client: TestCli
         9000,
         "DRAFT",
     )
-    assert approver.get("/api/claims").json()[0]["status"] == "SUBMITTED"
+    assert approver.get("/api/approvals").json()[0]["status"] == "SUBMITTED"
     replay = create_claim(client, original, idempotency_key=key)
     assert replay.status_code == 200
     assert replay.json()["id"] == claim_id
@@ -294,7 +294,7 @@ def test_approver_retains_reviewed_correction_visibility(client: TestClient, app
     claim_id = corrected_claim(client, approver)
     private = create_claim(client).json()
     assert approver.get(f"/api/claims/{private['id']}").status_code == 404
-    rows = approver.get("/api/claims").json()
+    rows = approver.get("/api/approvals").json()
     assert [row["id"] for row in rows] == [claim_id]
     assert private["has_review_history"] is False
     assert rows[0]["has_review_history"] is True
@@ -308,7 +308,7 @@ def test_approver_retains_reviewed_correction_visibility(client: TestClient, app
     submitted = submit_claim(client, claim_id, 4)
     assert submitted.status_code == 200
     assert submitted.json()["has_review_history"] is True
-    assert approver.get("/api/claims").json()[0]["has_review_history"] is True
+    assert approver.get("/api/approvals").json()[0]["has_review_history"] is True
     assert approver.get(f"/api/claims/{claim_id}").json()["has_review_history"] is True
     assert client.delete(f"/api/claims/{private['id']}?version=1").status_code == 204
 
@@ -369,7 +369,7 @@ def test_mutating_and_read_routes_require_a_seeded_mock_identity(application, ap
     with TestClient(application) as anonymous:
         assert anonymous.get("/api/claims").status_code == 401
         assert anonymous.get("/api/claims", headers=headers(99)).status_code == 401
-    assert create_claim(approver).status_code == 403
+    assert create_claim(approver).status_code == 201
 
 
 @pytest.mark.parametrize(
@@ -436,3 +436,114 @@ def test_initialization_preserves_existing_non_login_user(tmp_path):
         finally:
             connection.close()
         assert browser.post("/api/auth/login", json={"username": "Legacy employee", "password": "employee123"}).status_code == 401
+
+
+def test_workspace_approver_can_create_edit_submit_own(approver):
+    created = create_claim(approver)
+    assert created.status_code == 201
+    claim = created.json()
+    assert claim["allowed_actions"] == ["edit", "delete", "submit"]
+    edited = approver.patch(f"/api/claims/{claim['id']}", json={**claim_payload(title="Updated"), "version": 1})
+    assert edited.status_code == 200
+    assert submit_claim(approver, claim["id"], 2).json()["allowed_actions"] == []
+
+
+def test_workspace_lists_and_permissions(client, approver):
+    claim = create_claim(client).json()
+    assert submit_claim(client, claim["id"], 1).status_code == 200
+    assert approver.get("/api/claims").json() == []
+    assert client.get("/api/approvals").status_code == 403
+    assert approver.get("/api/approvals").json()[0]["allowed_actions"] == ["review"]
+
+
+def test_workspace_employee_queue_forbidden(client):
+    assert client.get("/api/approvals").status_code == 403
+
+
+def test_workspace_draft_actions(client):
+    assert create_claim(client).json()["allowed_actions"] == ["edit", "delete", "submit"]
+
+
+def test_workspace_queue_order_privacy_and_payload_ownership(application, client, approver):
+    with TestClient(application) as anonymous:
+        assert anonymous.get("/api/approvals").status_code == 401
+    assert create_claim(approver, claim_payload(owner_id=1)).status_code == 422
+    private = create_claim(client).json()
+    first = create_claim(client).json()
+    second = create_claim(client).json()
+    own = create_claim(approver).json()
+    assert submit_claim(client, first["id"], 1).status_code == 200
+    assert submit_claim(client, second["id"], 1).status_code == 200
+    assert submit_claim(approver, own["id"], 1).status_code == 200
+    assert [row["id"] for row in approver.get("/api/approvals").json()] == [second["id"], first["id"]]
+    assert [row["id"] for row in approver.get("/api/claims?role=employee").json()] == [own["id"]]
+    assert approver.get(f"/api/claims/{private['id']}").status_code == 404
+
+
+def test_workspace_self_review_forbidden(application, approver):
+    connection = application.state.database.connect()
+    try:
+        cursor = connection.execute("""INSERT INTO claims (owner_id, title, description, category, expense_date,
+            amount_paise, status, created_at, updated_at, version, idempotency_key, creation_payload)
+            VALUES (3, 'Own', 'Own', 'Other', '2025-02-03', 100, 'SUBMITTED',
+                    '2025-02-03', '2025-02-03', 1, 'own-key', '{}')""")
+        claim_id = cursor.lastrowid
+    finally:
+        connection.close()
+    before = approver.get(f"/api/claims/{claim_id}").json()
+    assert review_claim(approver, claim_id, {"version": 1, "decision": "APPROVED", "approved_amount_paise": 100}).status_code == 403
+    assert approver.get(f"/api/claims/{claim_id}").json() == before
+
+
+@pytest.mark.parametrize("claimant_fixture", ["client", "approver"])
+def test_workspace_claimant_lifecycle(request, claimant_fixture, application, monkeypatch):
+    import app
+
+    claimant = request.getfixturevalue(claimant_fixture)
+    connection = application.state.database.connect()
+    try:
+        connection.execute("INSERT INTO users (id, name, role) VALUES (4, 'Second Approver', 'APPROVER')")
+    finally:
+        connection.close()
+    monkeypatch.setitem(app.MOCK_ACCOUNTS, "second", ("second123", 4, "Second Approver", "APPROVER"))
+    with TestClient(application) as reviewer:
+        login = reviewer.post("/api/auth/login", json={"username": "second", "password": "second123"})
+        assert login.json()["permissions"] == ["create_claims", "review_claims", "mark_paid"]
+        assert reviewer.get("/api/auth/me").json() == login.json()
+        created = create_claim(claimant).json()
+        claim_id = created["id"]
+        assert created["allowed_actions"] == ["edit", "delete", "submit"]
+        assert reviewer.get(f"/api/claims/{claim_id}").status_code == 404
+        assert reviewer.get("/api/approvals").json() == []
+        edited = claimant.patch(f"/api/claims/{claim_id}", json={**claim_payload(title="Edited"), "version": 1}).json()
+        assert edited["allowed_actions"] == ["edit", "delete", "submit"]
+        submitted = submit_claim(claimant, claim_id, 2).json()
+        assert submitted["allowed_actions"] == []
+        assert reviewer.get("/api/approvals").json()[0]["allowed_actions"] == ["review"]
+        if claimant_fixture == "approver":
+            before = claimant.get(f"/api/claims/{claim_id}").json()
+            for body in ({"version": 3, "decision": "APPROVED", "approved_amount_paise": 12500},
+                         {"version": 3, "decision": "REJECTED", "comment": "No"}):
+                assert review_claim(claimant, claim_id, body).status_code == 403
+                assert claimant.get(f"/api/claims/{claim_id}").json() == before
+            assert claimant.get("/api/approvals").json() == []
+        rejected = review_claim(reviewer, claim_id, {"version": 3, "decision": "REJECTED", "comment": "Fix"}).json()
+        assert rejected["allowed_actions"] == []
+        assert claimant.get(f"/api/claims/{claim_id}").json()["allowed_actions"] == ["edit", "submit"]
+        corrected = claimant.patch(f"/api/claims/{claim_id}", json={**claim_payload(), "version": 4}).json()
+        assert corrected["allowed_actions"] == ["edit", "submit"]
+        assert claimant.delete(f"/api/claims/{claim_id}?version=5").status_code == 409
+        assert reviewer.get("/api/approvals").json()[0]["allowed_actions"] == []
+        assert reviewer.get(f"/api/claims/{claim_id}").json()["has_review_history"] is True
+        assert submit_claim(claimant, claim_id, 5).status_code == 200
+        approved = review_claim(reviewer, claim_id, {"version": 6, "decision": "APPROVED", "approved_amount_paise": 12500}).json()
+        assert approved["allowed_actions"] == ["pay"]
+        if claimant_fixture == "approver":
+            before = claimant.get(f"/api/claims/{claim_id}").json()
+            assert before["allowed_actions"] == []
+            assert claimant.post(f"/api/claims/{claim_id}/pay", json={"version": 7}).status_code == 403
+            assert claimant.get(f"/api/claims/{claim_id}").json() == before
+        paid = reviewer.post(f"/api/claims/{claim_id}/pay", json={"version": 7}).json()
+        assert paid["status"] == "PAID" and paid["allowed_actions"] == []
+        assert [e["action"] for e in claimant.get(f"/api/claims/{claim_id}").json()["history"]] == [
+            "CREATED", "EDITED", "SUBMITTED", "REJECTED", "EDITED", "SUBMITTED", "APPROVED", "PAID"]

@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_v
 from starlette.middleware.sessions import SessionMiddleware
 
 from db import Database
+from policy import allowed_actions, can_view, permissions_for
 
 
 MAX_AMOUNT_PAISE = 10_000_000_000
@@ -99,7 +100,7 @@ def claim_values(model: ClaimFields) -> dict[str, Any]:
     }
 
 
-def claim_response(row: sqlite3.Row) -> dict[str, Any]:
+def claim_response(row: sqlite3.Row, user: dict[str, Any]) -> dict[str, Any]:
     fields = (
         "id",
         "owner_id",
@@ -115,16 +116,21 @@ def claim_response(row: sqlite3.Row) -> dict[str, Any]:
         "updated_at",
         "version",
     )
-    return {**{field: row[field] for field in fields}, "has_review_history": bool(row["has_review_history"])}
+    return {**{field: row[field] for field in fields}, "has_review_history": bool(row["has_review_history"]),
+            "allowed_actions": allowed_actions(user, row)}
+
+
+CLAIM_PROJECTION = """SELECT c.*, u.name AS owner_name,
+                  EXISTS(SELECT 1 FROM claim_events e WHERE e.claim_id = c.id
+                         AND e.action IN ('APPROVED', 'REJECTED')) AS has_review_history,
+                  EXISTS(SELECT 1 FROM claim_events e WHERE e.claim_id = c.id
+                         AND e.action = 'SUBMITTED') AS has_submission_history
+           FROM claims c JOIN users u ON u.id = c.owner_id"""
 
 
 def fetch_claim(connection: sqlite3.Connection, claim_id: int) -> sqlite3.Row | None:
     return connection.execute(
-        """SELECT c.*, u.name AS owner_name,
-                  EXISTS(SELECT 1 FROM claim_events e WHERE e.claim_id = c.id
-                         AND e.action IN ('APPROVED', 'REJECTED')) AS has_review_history
-           FROM claims c JOIN users u ON u.id = c.owner_id
-           WHERE c.id = ?""",
+        CLAIM_PROJECTION + " WHERE c.id = ?",
         (claim_id,),
     ).fetchone()
 
@@ -214,16 +220,19 @@ def current_user(request: Request) -> dict[str, Any]:
         ).fetchone()
         if row is None or (row["name"], row["role"]) != (expected[2], expected[3]):
             raise HTTPException(status_code=401, detail="Authentication required")
-        return dict(row)
+        return {**dict(row), "permissions": permissions_for(row["role"])}
     finally:
         connection.close()
 
 
 def require_owner_or_approver_view(user: dict[str, Any], claim: sqlite3.Row) -> None:
-    if user["role"] == "EMPLOYEE" and claim["owner_id"] != user["id"]:
+    if not can_view(user, claim):
         raise HTTPException(status_code=404, detail="Claim not found")
-    if user["role"] == "APPROVER" and claim["status"] == "DRAFT" and not claim["has_review_history"]:
-        raise HTTPException(status_code=404, detail="Claim not found")
+
+
+def require_permission(user: dict[str, Any], permission: str) -> None:
+    if permission not in user["permissions"]:
+        raise HTTPException(status_code=403, detail="Permission denied")
 
 
 def create_app(db_path: str | Path | None = None) -> FastAPI:
@@ -277,28 +286,23 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     ) -> list[dict[str, Any]]:
         connection = request.app.state.database.connect()
         try:
-            if user["role"] == "EMPLOYEE":
-                rows = connection.execute(
-                    """SELECT c.*, u.name AS owner_name,
-                              EXISTS(SELECT 1 FROM claim_events e WHERE e.claim_id = c.id
-                                     AND e.action IN ('APPROVED', 'REJECTED')) AS has_review_history FROM claims c
-                       JOIN users u ON u.id = c.owner_id
-                       WHERE c.owner_id = ?
-                       ORDER BY c.created_at DESC, c.id DESC""",
-                    (user["id"],),
-                ).fetchall()
-            else:
-                rows = connection.execute(
-                    """SELECT c.*, u.name AS owner_name,
-                              EXISTS(SELECT 1 FROM claim_events e WHERE e.claim_id = c.id
-                                     AND e.action IN ('APPROVED', 'REJECTED')) AS has_review_history FROM claims c
-                       JOIN users u ON u.id = c.owner_id
-                       WHERE c.status <> 'DRAFT' OR EXISTS (
-                           SELECT 1 FROM claim_events e WHERE e.claim_id = c.id
-                           AND e.action IN ('APPROVED', 'REJECTED'))
-                       ORDER BY c.created_at DESC, c.id DESC"""
-                ).fetchall()
-            return [claim_response(row) for row in rows]
+            rows = connection.execute(CLAIM_PROJECTION +
+                " WHERE c.owner_id = ? ORDER BY c.created_at DESC, c.id DESC", (user["id"],)).fetchall()
+            return [claim_response(row, user) for row in rows]
+        finally:
+            connection.close()
+
+    @application.get("/api/approvals")
+    def list_approvals(request: Request, user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        require_permission(user, "review_claims")
+        connection = request.app.state.database.connect()
+        try:
+            rows = connection.execute(CLAIM_PROJECTION + """
+                WHERE c.owner_id <> ? AND (c.status <> 'DRAFT' OR EXISTS (
+                    SELECT 1 FROM claim_events e WHERE e.claim_id = c.id
+                    AND e.action IN ('APPROVED', 'REJECTED')))
+                ORDER BY c.created_at DESC, c.id DESC""", (user["id"],)).fetchall()
+            return [claim_response(row, user) for row in rows]
         finally:
             connection.close()
 
@@ -309,8 +313,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         user: dict[str, Any] = Depends(current_user),
         idempotency_key: UUID = Header(alias="Idempotency-Key"),
     ) -> dict[str, Any] | JSONResponse:
-        if user["role"] != "EMPLOYEE":
-            raise HTTPException(status_code=403, detail="Only employees can create claims")
+        require_permission(user, "create_claims")
         values = claim_values(body)
         canonical = json.dumps(values, sort_keys=True, separators=(",", ":"))
         database: Database = request.app.state.database
@@ -326,7 +329,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                         detail="Idempotency-Key was already used with a different payload",
                     )
                 row = fetch_claim(connection, existing["id"])
-                return JSONResponse(status_code=200, content=claim_response(row))
+                return JSONResponse(status_code=200, content=claim_response(row, user))
 
             now = utc_now()
             cursor = connection.execute(
@@ -350,7 +353,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             )
             row = fetch_claim(connection, cursor.lastrowid)
             append_event(connection, row, user["id"], "CREATED", None, now)
-            return claim_response(row)
+            return claim_response(row, user)
 
     @application.get("/api/claims/{claim_id}")
     def get_claim(
@@ -364,7 +367,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             if row is None:
                 raise HTTPException(status_code=404, detail="Claim not found")
             require_owner_or_approver_view(user, row)
-            result = claim_response(row)
+            result = claim_response(row, user)
             result["history"] = event_response(connection, claim_id)
             return result
         finally:
@@ -377,8 +380,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         claim_id: int = PathParam(gt=0),
         user: dict[str, Any] = Depends(current_user),
     ) -> dict[str, Any]:
-        if user["role"] != "EMPLOYEE":
-            raise HTTPException(status_code=403, detail="Only employees can edit claims")
+        require_permission(user, "create_claims")
         database: Database = request.app.state.database
         with write_transaction(database) as connection:
             row = fetch_claim(connection, claim_id)
@@ -386,7 +388,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 raise HTTPException(status_code=404, detail="Claim not found")
             if row["version"] != body.version:
                 raise HTTPException(status_code=409, detail="Claim version is stale")
-            if row["status"] not in ("DRAFT", "REJECTED"):
+            if "edit" not in allowed_actions(user, row):
                 raise HTTPException(status_code=409, detail="Claim cannot be edited in its current status")
             values = claim_values(body)
             next_status = "DRAFT"
@@ -412,7 +414,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 raise HTTPException(status_code=409, detail="Claim version is stale")
             row = fetch_claim(connection, claim_id)
             append_event(connection, row, user["id"], "EDITED", None, now)
-            return claim_response(row)
+            return claim_response(row, user)
 
     @application.delete("/api/claims/{claim_id}", status_code=204)
     def delete_claim(
@@ -421,8 +423,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         version: int = Query(gt=0),
         user: dict[str, Any] = Depends(current_user),
     ) -> Response:
-        if user["role"] != "EMPLOYEE":
-            raise HTTPException(status_code=403, detail="Only employees can delete claims")
+        require_permission(user, "create_claims")
         database: Database = request.app.state.database
         with write_transaction(database) as connection:
             row = fetch_claim(connection, claim_id)
@@ -430,12 +431,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 raise HTTPException(status_code=404, detail="Claim not found")
             if row["version"] != version:
                 raise HTTPException(status_code=409, detail="Claim version is stale")
-            if row["status"] != "DRAFT":
-                raise HTTPException(status_code=409, detail="Only drafts can be deleted")
-            if connection.execute(
-                "SELECT 1 FROM claim_events WHERE claim_id = ? AND action = 'SUBMITTED' LIMIT 1",
-                (claim_id,),
-            ).fetchone():
+            if "delete" not in allowed_actions(user, row):
                 raise HTTPException(status_code=409, detail="Only never-submitted drafts can be deleted")
             deleted = connection.execute(
                 "DELETE FROM claims WHERE id = ? AND version = ?", (claim_id, version)
@@ -451,8 +447,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         claim_id: int = PathParam(gt=0),
         user: dict[str, Any] = Depends(current_user),
     ) -> dict[str, Any]:
-        if user["role"] != "EMPLOYEE":
-            raise HTTPException(status_code=403, detail="Only employees can submit claims")
+        require_permission(user, "create_claims")
         database: Database = request.app.state.database
         with write_transaction(database) as connection:
             row = fetch_claim(connection, claim_id)
@@ -460,7 +455,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 raise HTTPException(status_code=404, detail="Claim not found")
             if row["version"] != body.version:
                 raise HTTPException(status_code=409, detail="Claim version is stale")
-            if row["status"] not in ("DRAFT", "REJECTED"):
+            if "submit" not in allowed_actions(user, row):
                 raise HTTPException(status_code=409, detail="Claim cannot be submitted in its current status")
             now = utc_now()
             updated = connection.execute(
@@ -473,7 +468,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 raise HTTPException(status_code=409, detail="Claim version is stale")
             row = fetch_claim(connection, claim_id)
             append_event(connection, row, user["id"], "SUBMITTED", None, now)
-            return claim_response(row)
+            return claim_response(row, user)
 
     @application.post("/api/claims/{claim_id}/review")
     def review_claim(
@@ -482,16 +477,18 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         claim_id: int = PathParam(gt=0),
         user: dict[str, Any] = Depends(current_user),
     ) -> dict[str, Any]:
-        if user["role"] != "APPROVER":
-            raise HTTPException(status_code=403, detail="Only approvers can review claims")
+        require_permission(user, "review_claims")
         database: Database = request.app.state.database
         with write_transaction(database) as connection:
             row = fetch_claim(connection, claim_id)
-            if row is None or (row["status"] == "DRAFT" and not row["has_review_history"]):
+            if row is None:
                 raise HTTPException(status_code=404, detail="Claim not found")
+            if row["owner_id"] == user["id"]:
+                raise HTTPException(status_code=403, detail="Cannot review your own claim")
+            require_owner_or_approver_view(user, row)
             if row["version"] != body.version:
                 raise HTTPException(status_code=409, detail="Claim version is stale")
-            if row["status"] != "SUBMITTED":
+            if "review" not in allowed_actions(user, row):
                 raise HTTPException(status_code=409, detail="Only submitted claims can be reviewed")
 
             if body.decision == "APPROVED":
@@ -523,7 +520,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 raise HTTPException(status_code=409, detail="Claim version is stale")
             row = fetch_claim(connection, claim_id)
             append_event(connection, row, user["id"], next_status, body.comment, now)
-            return claim_response(fetch_claim(connection, claim_id))
+            return claim_response(fetch_claim(connection, claim_id), user)
 
     @application.post("/api/claims/{claim_id}/pay")
     def pay_claim(
@@ -532,16 +529,18 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         claim_id: int = PathParam(gt=0),
         user: dict[str, Any] = Depends(current_user),
     ) -> dict[str, Any]:
-        if user["role"] != "APPROVER":
-            raise HTTPException(status_code=403, detail="Only approvers can mark claims paid")
+        require_permission(user, "mark_paid")
         database: Database = request.app.state.database
         with write_transaction(database) as connection:
             row = fetch_claim(connection, claim_id)
-            if row is None or (row["status"] == "DRAFT" and not row["has_review_history"]):
+            if row is None:
                 raise HTTPException(status_code=404, detail="Claim not found")
+            if row["owner_id"] == user["id"]:
+                raise HTTPException(status_code=403, detail="Cannot pay your own claim")
+            require_owner_or_approver_view(user, row)
             if row["version"] != body.version:
                 raise HTTPException(status_code=409, detail="Claim version is stale")
-            if row["status"] != "APPROVED":
+            if "pay" not in allowed_actions(user, row):
                 raise HTTPException(status_code=409, detail="Only approved claims can be paid")
             now = utc_now()
             updated = connection.execute(
@@ -553,7 +552,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 raise HTTPException(status_code=409, detail="Claim version is stale")
             row = fetch_claim(connection, claim_id)
             append_event(connection, row, user["id"], "PAID", None, now)
-            return claim_response(row)
+            return claim_response(row, user)
 
     return application
 
