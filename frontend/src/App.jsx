@@ -7,7 +7,6 @@ const FILTERS = [
   { id: 'APPROVED', label: 'Approved' },
   { id: 'REJECTED', label: 'Rejected' },
   { id: 'PAID', label: 'Paid' },
-  { id: 'REVIEWED', label: 'Reviewed history' },
 ];
 const MY_FILTERS = [
   { id: 'ALL', label: 'All claims' },
@@ -306,7 +305,6 @@ export default function App() {
 
   const filteredClaims = useMemo(() => {
     if (filter === 'ALL') return visibleClaims;
-    if (filter === 'REVIEWED') return visibleClaims.filter((claim) => claim.has_review_history);
     return visibleClaims.filter((claim) => claim.status === filter);
   }, [visibleClaims, filter]);
 

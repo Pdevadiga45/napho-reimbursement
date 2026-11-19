@@ -236,7 +236,8 @@ test('employee and approver claim workflow', async ({ page }) => {
   await expect(page.locator('.claim-detail .status-chip.status-draft')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Delete draft' })).toHaveCount(0);
   await switchUser(page, 'manager');
-  await page.getByRole('button', { name: 'Reviewed history' }).click();
+  await expect(page.getByRole('button', { name: 'Reviewed history' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'All claims' }).click();
   await page.getByRole('button', { name: /Hotel correction/ }).click();
   await expect(page.locator('.claim-detail .status-chip.status-draft')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Review this claim' })).toHaveCount(0);
@@ -246,7 +247,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await expect(page.locator('.claim-detail .status-chip.status-submitted')).toBeVisible();
 
   await switchUser(page, 'manager');
-  await page.getByRole('button', { name: 'Reviewed history' }).click();
+  await page.getByRole('button', { name: 'All claims' }).click();
   await page.getByRole('button', { name: /Hotel correction/ }).click();
   await expect(page.getByRole('heading', { name: 'Review this claim' })).toBeVisible();
   await expect(page.getByLabel('Approved amount (₹)')).toHaveValue('1900.00');
@@ -259,7 +260,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await expect(page.locator('.timeline-heading strong').filter({ hasText: 'Approved' })).toHaveCount(1);
   await expect(page.locator('.event-actor').filter({ hasText: 'Manager One' })).toHaveCount(2);
   await expect(page.getByText('Please check the submitted amount.')).toBeVisible();
-  await page.getByRole('button', { name: 'Reviewed history' }).click();
+  await page.getByRole('button', { name: 'All claims' }).click();
   await expect(page.getByRole('button', { name: /Hotel correction/ })).toBeVisible();
 
   await switchUser(page, 'employee');
