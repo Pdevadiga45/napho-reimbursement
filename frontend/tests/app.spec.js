@@ -78,8 +78,9 @@ async function signIn(page, username) {
 }
 
 async function submitClaim(page) {
-  page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'Submit claim' }).click();
+  const modal = page.getByRole('dialog');
+  await modal.getByRole('button', { name: /^(Submit|Resubmit) claim$/ }).click();
 }
 
 async function switchUser(page, username) {
@@ -225,8 +226,8 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByLabel('Requested amount (₹)').fill('950');
   await page.getByRole('button', { name: 'Save changes' }).click();
   await expect(page.locator('.amount-summary strong').first()).toHaveText('₹950.00');
-  page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'Delete draft' }).click();
+  await page.getByRole('dialog', { name: 'Delete draft?' }).getByRole('button', { name: 'Delete draft' }).click();
   await expect(page.getByText('No claims yet')).toBeVisible();
   await expect(page.getByRole('button', { name: /Office supplies sample revised/ })).toHaveCount(0);
 
@@ -490,7 +491,7 @@ test('history shows account names without roles and My claims has no currency fo
 });
 
 for (const state of ['first submission', 'direct rejected resubmission', 'corrected draft resubmission']) {
-  test(`native confirmation for ${state}`, async ({ page }) => {
+  test(`rendered confirmation for ${state}`, async ({ page }) => {
     await page.goto('/');
     const baseURL = new URL(page.url()).origin;
     const employee = await request.newContext({ baseURL });
@@ -518,20 +519,33 @@ for (const state of ['first submission', 'direct rejected resubmission', 'correc
       page.on('request', (req) => {
         if (req.method() === 'POST' && new URL(req.url()).pathname === `/api/claims/${claim.id}/submit`) submits += 1;
       });
-      const expectedPrompt = `Are you sure you want to ${state === 'first submission' ? 'submit' : 'resubmit'} this claim? You cannot edit it while it is under review.`;
-      let prompt;
-      page.once('dialog', async (dialog) => { prompt = { type: dialog.type(), message: dialog.message() }; await dialog.dismiss(); });
-      await page.getByRole('button', { name: 'Submit claim' }).click();
-      expect(prompt).toEqual({ type: 'confirm', message: expectedPrompt });
+      const label = state === 'first submission' ? 'Submit claim' : 'Resubmit claim';
+      const unexpectedDialogs = [];
+      page.on('dialog', async (dialog) => { unexpectedDialogs.push(dialog.message()); await dialog.dismiss(); });
+      const trigger = page.getByRole('button', { name: 'Submit claim' });
+      await trigger.click();
+      const modal = page.getByRole('dialog', { name: `${label}?` });
+      await expect(modal).toBeVisible();
+      await expect(modal).toContainText(payload.title);
+      await expect(modal.getByRole('button', { name: 'Cancel' })).toBeFocused();
+      if (state === 'first submission') {
+        await page.keyboard.press('Escape');
+        await expect(modal).toHaveCount(0);
+        await expect(trigger).toBeFocused();
+        expect(submits).toBe(0);
+        expect(await (await employee.get(`/api/claims/${claim.id}`)).json()).toEqual(before);
+        await trigger.click();
+      }
+      await modal.getByRole('button', { name: 'Cancel' }).click();
+      await expect(trigger).toBeFocused();
       expect(submits).toBe(0);
       expect(await (await employee.get(`/api/claims/${claim.id}`)).json()).toEqual(before);
       await expect(page.getByRole('heading', { name: payload.title })).toBeVisible();
       await expect(page.getByRole('button', { name: 'Submit claim' })).toBeVisible();
 
-      prompt = undefined;
-      page.once('dialog', async (dialog) => { prompt = { type: dialog.type(), message: dialog.message() }; await dialog.accept(); });
-      await page.getByRole('button', { name: 'Submit claim' }).click();
-      expect(prompt).toEqual({ type: 'confirm', message: expectedPrompt });
+      await trigger.click();
+      await modal.getByRole('button', { name: label, exact: true }).click();
+      expect(unexpectedDialogs).toEqual([]);
       await expect(page.locator('.claim-detail .status-chip.status-submitted')).toBeVisible();
       expect(submits).toBe(1);
       const after = await (await employee.get(`/api/claims/${claim.id}`)).json();
@@ -545,3 +559,75 @@ for (const state of ['first submission', 'direct rejected resubmission', 'correc
     }
   });
 }
+
+test('delete confirmation cancels and deletes on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.goto('/');
+  const employee = await request.newContext({ baseURL: new URL(page.url()).origin });
+  try {
+    expect((await employee.post('/api/auth/login', { data: { username: 'employee', password: 'employee123' } })).ok()).toBeTruthy();
+    const payload = { title: `Delete ${randomUUID()}`, category: 'Travel', description: 'Delete fixture', expense_date: new Date().toISOString().slice(0, 10), amount_paise: 10000 };
+    const claim = await (await employee.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: payload })).json();
+    const before = await (await employee.get(`/api/claims/${claim.id}`)).json();
+    const unexpectedDialogs = [];
+    page.on('dialog', async (dialog) => { unexpectedDialogs.push(dialog.message()); await dialog.dismiss(); });
+    let deletes = 0;
+    page.on('request', (req) => { if (req.method() === 'DELETE' && new URL(req.url()).pathname === `/api/claims/${claim.id}`) deletes += 1; });
+    await signIn(page, 'employee');
+    await page.getByRole('button', { name: payload.title }).click();
+    const trigger = page.getByRole('button', { name: 'Delete draft' });
+    await trigger.click();
+    const modal = page.getByRole('dialog', { name: 'Delete draft?' });
+    await expect(modal).toContainText(payload.title);
+    await expect(modal).toContainText('cannot be undone');
+    const box = await modal.boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(320);
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(640);
+    for (const button of [modal.getByRole('button', { name: 'Cancel' }), modal.getByRole('button', { name: 'Delete draft' })]) {
+      expect((await button.boundingBox()).height).toBeGreaterThanOrEqual(44);
+    }
+    await page.mouse.click(1, 1);
+    await expect(modal).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    expect(deletes).toBe(0);
+    expect(await (await employee.get(`/api/claims/${claim.id}`)).json()).toEqual(before);
+    await trigger.click();
+    await modal.getByRole('button', { name: 'Cancel' }).click();
+    await expect(trigger).toBeFocused();
+    expect(deletes).toBe(0);
+    expect(await (await employee.get(`/api/claims/${claim.id}`)).json()).toEqual(before);
+    await trigger.click();
+    await modal.getByRole('button', { name: 'Delete draft' }).click();
+    await expect(page.getByText('Draft deleted.')).toBeVisible();
+    expect(deletes).toBe(1);
+    expect((await employee.get(`/api/claims/${claim.id}`)).status()).toBe(404);
+    expect(unexpectedDialogs).toEqual([]);
+  } finally { await employee.dispose(); }
+});
+
+test('confirmation submits the captured version after an external edit', async ({ page }) => {
+  await page.goto('/');
+  const employee = await request.newContext({ baseURL: new URL(page.url()).origin });
+  try {
+    expect((await employee.post('/api/auth/login', { data: { username: 'employee', password: 'employee123' } })).ok()).toBeTruthy();
+    const payload = { title: `Stale ${randomUUID()}`, category: 'Travel', description: 'Snapshot fixture', expense_date: new Date().toISOString().slice(0, 10), amount_paise: 10000 };
+    const claim = await (await employee.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: payload })).json();
+    await signIn(page, 'employee');
+    await page.getByRole('button', { name: payload.title }).click();
+    await page.getByRole('button', { name: 'Submit claim' }).click();
+    const modal = page.getByRole('dialog', { name: 'Submit claim?' });
+    await expect(modal).toBeVisible();
+    expect((await employee.patch(`/api/claims/${claim.id}`, { data: { ...payload, description: 'External edit', version: claim.version } })).ok()).toBeTruthy();
+    const response = page.waitForResponse((res) => res.url().endsWith(`/api/claims/${claim.id}/submit`) && res.request().method() === 'POST');
+    await modal.getByRole('button', { name: 'Submit claim' }).click();
+    const result = await response;
+    expect(result.status()).toBe(409);
+    expect(result.request().postDataJSON()).toEqual({ version: claim.version });
+    await expect(page.getByRole('alert')).toContainText('changed since it was opened');
+    const after = await (await employee.get(`/api/claims/${claim.id}`)).json();
+    expect(after.status).toBe('DRAFT');
+    expect(after.history.filter((event) => event.action === 'SUBMITTED')).toHaveLength(0);
+  } finally { await employee.dispose(); }
+});

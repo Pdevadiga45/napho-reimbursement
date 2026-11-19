@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatRupees, parseRupees } from './money.js';
+import ConfirmDialog from './ConfirmDialog.jsx';
 
 const FILTERS = [
   { id: 'ALL', label: 'All claims' },
@@ -205,6 +206,8 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [conflictNotice, setConflictNotice] = useState('');
   const [pendingMutation, setPendingMutation] = useState('');
+  const [confirmation, setConfirmation] = useState(null);
+  const confirmationRef = useRef(null);
   const [filter, setFilter] = useState('ALL');
   const [formMode, setFormMode] = useState(null);
   const [formValues, setFormValues] = useState(null);
@@ -423,30 +426,35 @@ export default function App() {
     if (result) setFormMode(null);
   }
 
-  async function deleteDraft() {
-    if (!currentDetail || !window.confirm('Delete this draft? This action cannot be undone.')) return;
-    const id = currentDetail.id;
-    const result = await runMutation(
-      'Deleting draft',
-      () => api(`/api/claims/${id}?version=${currentDetail.version}`, userId, { method: 'DELETE' }),
-      'Draft deleted.',
-      () => {
-        setSelectedId(null);
-        setFormMode(null);
-      },
-    );
-    if (result === null) return;
+  function dismissConfirmation() {
+    confirmationRef.current = null;
+    setConfirmation(null);
   }
 
-  async function submitClaim() {
-    if (!currentDetail || authBusy || pendingMutation) return;
-    const action = currentDetail.history.some((event) => event.action === 'SUBMITTED') ? 'resubmit' : 'submit';
-    if (!window.confirm(`Are you sure you want to ${action} this claim? You cannot edit it while it is under review.`)) return;
-    await runMutation(
-      'Submitting claim',
-      () => api(`/api/claims/${currentDetail.id}/submit`, userId, { method: 'POST', body: JSON.stringify({ version: currentDetail.version }) }),
-      'Claim submitted for review.',
-    );
+  function openConfirmation(type, event) {
+    if (!currentDetail || authBusy || pendingMutation || confirmationRef.current) return;
+    const snapshot = {
+      type, id: currentDetail.id, version: currentDetail.version, title: currentDetail.title,
+      userId, workspace, trigger: event.currentTarget,
+      resubmission: currentDetail.history.some((item) => item.action === 'SUBMITTED'),
+    };
+    confirmationRef.current = snapshot;
+    setConfirmation(snapshot);
+  }
+
+  async function confirmOperation() {
+    const snapshot = confirmationRef.current;
+    if (!snapshot || authBusy || pendingMutation || snapshot.userId !== userId || snapshot.workspace !== workspace) return;
+    dismissConfirmation();
+    if (snapshot.type === 'delete') {
+      await runMutation('Deleting draft',
+        () => api(`/api/claims/${snapshot.id}?version=${snapshot.version}`, snapshot.userId, { method: 'DELETE' }),
+        'Draft deleted.', () => { setSelectedId(null); setFormMode(null); });
+    } else {
+      await runMutation('Submitting claim',
+        () => api(`/api/claims/${snapshot.id}/submit`, snapshot.userId, { method: 'POST', body: JSON.stringify({ version: snapshot.version }) }),
+        'Claim submitted for review.');
+    }
   }
 
   async function approveClaim(event) {
@@ -504,6 +512,7 @@ export default function App() {
   }
 
   function clearSession() {
+    dismissConfirmation();
     listRequestId.current += 1;
     detailRequestId.current += 1;
     creationKey.current = null;
@@ -531,6 +540,7 @@ export default function App() {
 
   function changeWorkspace(next) {
     if (authBusy || pendingMutation || next === workspace) return;
+    dismissConfirmation();
     listRequestId.current += 1;
     detailRequestId.current += 1;
     setSelectedId(null);
@@ -565,6 +575,7 @@ export default function App() {
 
   async function logout() {
     if (authBusy || pendingMutation) return;
+    dismissConfirmation();
     setAuthBusy(true);
     try {
       await api('/api/auth/logout', null, { method: 'POST' });
@@ -770,9 +781,9 @@ export default function App() {
 
                 {(actions.includes('submit') || actions.includes('edit') || actions.includes('delete')) && (
                   <div className="employee-actions">
-                    {actions.includes('submit') && <button className="button button-primary" type="button" onClick={submitClaim} disabled={authBusy || Boolean(pendingMutation)}>{pendingMutation === 'Submitting claim' ? 'Submitting…' : 'Submit claim'}</button>}
+                    {actions.includes('submit') && <button className="button button-primary" type="button" onClick={(event) => openConfirmation('submit', event)} disabled={authBusy || Boolean(pendingMutation)}>{pendingMutation === 'Submitting claim' ? 'Submitting…' : 'Submit claim'}</button>}
                     {actions.includes('edit') && <button className="button button-secondary" type="button" onClick={startEditingClaim} disabled={authBusy || Boolean(pendingMutation)}>{currentDetail.status === 'REJECTED' ? 'Edit correction' : 'Edit draft'}</button>}
-                    {actions.includes('delete') && <button className="button button-danger-text" type="button" onClick={deleteDraft} disabled={authBusy || Boolean(pendingMutation)}>{pendingMutation === 'Deleting draft' ? 'Deleting…' : 'Delete draft'}</button>}
+                    {actions.includes('delete') && <button className="button button-danger-text" type="button" onClick={(event) => openConfirmation('delete', event)} disabled={authBusy || Boolean(pendingMutation)}>{pendingMutation === 'Deleting draft' ? 'Deleting…' : 'Delete draft'}</button>}
                   </div>
                 )}
                 {actions.includes('submit') && currentDetail.status === 'DRAFT' && <p className="readonly-hint">Once submitted, this claim is locked while it is under review.</p>}
@@ -782,6 +793,15 @@ export default function App() {
           </section>
         </div>
       </main>
+      {confirmation && <ConfirmDialog
+        title={`${confirmation.type === 'delete' ? 'Delete draft' : confirmation.resubmission ? 'Resubmit claim' : 'Submit claim'}?`}
+        description={confirmation.type === 'delete' ? 'This action cannot be undone.' : 'This claim will be locked while it is under review.'}
+        claimTitle={confirmation.title}
+        confirmLabel={confirmation.type === 'delete' ? 'Delete draft' : confirmation.resubmission ? 'Resubmit claim' : 'Submit claim'}
+        trigger={confirmation.trigger}
+        onCancel={dismissConfirmation}
+        onConfirm={confirmOperation}
+      />}
     </div>
   );
 }
