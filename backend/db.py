@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 
 DEFAULT_DB_PATH = Path(__file__).resolve().with_name("napho.sqlite3")
@@ -81,6 +83,20 @@ class Database:
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 2000")
         return connection
+
+    @contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        connection = self.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            yield connection
+            connection.commit()
+        except Exception:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,17 +1,10 @@
-# Napho reimbursement demo
+# Napho Reimbursement Management
 
-An assignment demo for expense reimbursements. Everyone can claim their own
-expenses; selected accounts can also review and pay claims submitted by others.
-
-The backend uses Python, FastAPI, and the standard library `sqlite3` module. The
-frontend uses React and Vite.
+A React and Python application for creating, reviewing and tracking expense claims, including partial approval.
 
 ## Setup
 
-Install Python 3.14 or newer, [uv](https://docs.astral.sh/uv/), and Node.js with
-npm. Use Node 22.12 or newer for Vite 7 (Node 26 has also been used).
-
-In one terminal:
+Requires Python 3.14+, [uv](https://docs.astral.sh/uv/), and Node.js 22.12+ with npm. From the repository root, start each service in a separate terminal.
 
 ```sh
 cd backend
@@ -19,30 +12,47 @@ uv sync --locked
 uv run uvicorn app:app --reload --host 127.0.0.1 --port 8000
 ```
 
-In another terminal:
-
 ```sh
 cd frontend
 npm ci
 npm run dev -- --host 127.0.0.1
 ```
 
-Open http://127.0.0.1:5173 and sign in with either mock account:
+Open http://127.0.0.1:5173. API documentation is available at http://127.0.0.1:8000/docs.
 
-| Role | Username | Password |
+| Account | Username | Password |
 | --- | --- | --- |
-| Employee | `employee` | `employee123` |
-| Manager | `manager` | `manager123` |
+| Employee One | `employee` | `employee123` |
+| Manager One | `manager` | `manager123` |
 
-API documentation is
-at http://127.0.0.1:8000/docs. Vite proxies `/api` to the backend; set
-`NAPHO_API_TARGET` when starting Vite to use a different API address.
+Startup creates the schema and mock accounts. Data persists in `backend/napho.sqlite3`; set `NAPHO_DB_PATH` to use another location. Claims are not preloaded in a fresh checkout.
 
-The backend initializes the schema and mock users automatically at startup.
-Data persists locally in `backend/napho.sqlite3` by default. Set `NAPHO_DB_PATH`
-before starting the backend to use another database path.
+## Structure
 
-## Checks
+- `frontend/`: React UI; communicates with the backend through `/api` requests.
+- `backend/app.py`: FastAPI endpoints, validation, workflow decisions and HTTP responses.
+- `backend/store.py`: SQLite queries and claim persistence.
+- `backend/policy.py`: permissions and ownership/state-based action rules.
+- `backend/db.py`: SQLite schema, initialization, connections and transactions.
+
+## Data model and design decisions
+
+- **Users** hold identity and role. **Claims** belong to a user and hold expense details, status, requested/approved amounts and a version. **Claim events** link each claim to the acting user and preserve expense snapshots, decisions, comments and UTC timestamps.
+- Money is stored as integer paise, avoiding floating-point rounding. Partial approval preserves the requested amount and records the approved amount separately.
+- The backend enforces permissions, ownership and valid states. Managers can submit their own claims but cannot review or mark them paid.
+- Transactions and version checks reject stale competing actions with HTTP 409. Per-owner idempotency keys prevent duplicate creation; workflow changes and their history are recorded together.
+- Only never-submitted drafts can be deleted. Corrections and resubmissions retain previous decisions and remain accessible to authorized reviewers.
+
+## Assumptions
+
+- One expense is one claim; INR is the only currency, and expense dates cannot be in the future.
+- Mock logins are sufficient. Marking a claim paid records an outcome; it does not transfer money.
+- Rejection and partial approval require a comment. A partial approval has status `APPROVED`.
+- Both accounts can manage personal claims. Only the manager can process others' claims; a manager's own claim needs another authorized reviewer.
+
+## Tests
+
+Run these commands from the respective directories after setup:
 
 ```sh
 cd backend
@@ -56,47 +66,6 @@ npm test
 npm run build
 ```
 
-Playwright starts its own backend on port 18000 and frontend on port 15173,
-with a separate test database under `frontend/test-results`.
+API tests cover lifecycle transitions, ownership, amounts, history, duplicate requests and concurrent reviews. Frontend tests cover the user workflows, permissions, confirmations, session handling and responsive layout. Playwright uses separate test servers and an isolated database, not the local showcase data.
 
-## Model and assumptions
-
-My claims contains the signed-in user's own claims. Approvals is available to
-reviewers and contains other users' non-private claims, including previously
-reviewed claims being corrected. The backend enforces ownership and permissions
-and returns `allowed_actions` for each claim; the frontend uses those actions to
-display controls. Permissions are additive, with ownership and claim state
-constraining each action, rather than a general role-management framework.
-
-| Account | Own claims | Other users' claims |
-| --- | --- | --- |
-| Employee | Create, edit, submit and track | No approvals access |
-| Manager | Create, edit, submit and track | Review submitted claims and mark approved claims paid |
-
-Both accounts are claimants. The manager cannot review or pay their own claim;
-with the current two mock accounts, the manager's own submission needs another
-manager before it can be completed. Draft deletion and other actions also depend
-on claim state and history. These principles are inspired by [Ramp's user roles](https://support.ramp.com/hc/en-us/articles/360042579734-What-are-the-types-of-Ramp-users-), [Ramp's approval policies](https://support.ramp.com/hc/en-us/articles/27132114712723-Setting-up-expense-approval-policies-transactions-and-reimbursements), and [Expensify's expense and report actions](https://help.expensify.com/articles/new-expensify/reports-and-expenses/Expense-and-Report-Actions).
-
-Each expense is one claim. SQLite stores users, claims, and immutable claim event
-snapshots with UTC timestamps. Amounts are integer paise; INR is the only currency.
-An expense date cannot be in the future. Creation uses a per-owner idempotency
-key; transactional updates and version conflicts (HTTP 409) prevent duplicate
-reviews and events from stale requests.
-
-A rejected claim can be corrected to a draft and submitted again. A partial
-approval remains `APPROVED`, with requested and approved amounts stored
-separately. Rejection and partial approval require a comment. Marking a claim
-paid records the approved amount; there is no payment processing. Only drafts
-that have never been submitted can be deleted, along with their history. New
-drafts are private to their owner; approvers can still access previously reviewed
-claims while they are being corrected and after resubmission.
-
-Sessions use a signed, HttpOnly development cookie. Set the optional
-`NAPHO_SESSION_SECRET` environment variable before starting the backend to replace
-the development signing secret; no dotenv file is loaded automatically. The public
-mock credentials and development cookie settings are not production security.
-This is a single-instance demo: SQLite is suitable for its small local workload,
-not a multi-instance deployment. Receipts, production authentication, pagination,
-deployment, and migrations are outside the demo. AI is deliberately excluded
-pending a separate bonus discussion.
+## Known limitations
