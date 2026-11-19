@@ -439,7 +439,9 @@ export default function App() {
   }
 
   async function submitClaim() {
-    if (!currentDetail) return;
+    if (!currentDetail || authBusy || pendingMutation) return;
+    const action = currentDetail.history.some((event) => event.action === 'SUBMITTED') ? 'resubmit' : 'submit';
+    if (!window.confirm(`Are you sure you want to ${action} this claim? You cannot edit it while it is under review.`)) return;
     await runMutation(
       'Submitting claim',
       () => api(`/api/claims/${currentDetail.id}/submit`, userId, { method: 'POST', body: JSON.stringify({ version: currentDetail.version }) }),

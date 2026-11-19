@@ -28,6 +28,11 @@ async function signIn(page, username) {
   await expect(page.getByRole('heading', { name: 'My claims' })).toBeVisible();
 }
 
+async function submitClaim(page) {
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: 'Submit claim' }).click();
+}
+
 async function switchUser(page, username) {
   await page.getByRole('button', { name: 'Log out' }).click();
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
@@ -184,7 +189,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByLabel('Description').fill('Airport transfer for a client visit.');
   await page.getByRole('button', { name: 'Create draft' }).click();
   await expect(page.getByRole('heading', { name: 'Airport taxi' })).toBeVisible();
-  await page.getByRole('button', { name: 'Submit claim' }).click();
+  await submitClaim(page);
   await expect(page.locator('.claim-detail .status-chip.status-submitted')).toBeVisible();
 
   await switchUser(page, 'manager');
@@ -214,7 +219,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByLabel('Requested amount (₹)').fill('2000');
   await page.getByLabel('Description').fill('Hotel stay during a work trip.');
   await page.getByRole('button', { name: 'Create draft' }).click();
-  await page.getByRole('button', { name: 'Submit claim' }).click();
+  await submitClaim(page);
   await expect(page.locator('.claim-detail .status-chip.status-submitted')).toBeVisible();
 
   await switchUser(page, 'manager');
@@ -243,7 +248,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Review this claim' })).toHaveCount(0);
   await switchUser(page, 'employee');
   await page.getByRole('button', { name: /Hotel correction/ }).click();
-  await page.getByRole('button', { name: 'Submit claim' }).click();
+  await submitClaim(page);
   await expect(page.locator('.claim-detail .status-chip.status-submitted')).toBeVisible();
 
   await switchUser(page, 'manager');
@@ -275,7 +280,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Stale review guard' })).toBeVisible();
   const claimLabel = await page.locator('.claim-detail .eyebrow').textContent();
   const claimId = Number(claimLabel.match(/#(\d+)/)[1]);
-  await page.getByRole('button', { name: 'Submit claim' }).click();
+  await submitClaim(page);
 
   await switchUser(page, 'manager');
   await page.getByRole('button', { name: /Stale review guard/ }).click();
@@ -311,7 +316,7 @@ test('approver owns claims but cannot review their own submission', async ({ pag
   await page.getByRole('button', { name: 'Create draft' }).click();
   await expect(page.getByRole('button', { name: 'Edit draft' })).toBeVisible();
   const claimId = Number((await page.locator('.claim-detail .eyebrow').textContent()).match(/#(\d+)/)[1]);
-  await page.getByRole('button', { name: 'Submit claim' }).click();
+  await submitClaim(page);
   await expect(page.getByText('Another manager must review this claim.')).toBeVisible();
   for (const name of ['Approve claim', 'Reject claim', 'Mark as paid']) await expect(page.getByRole('button', { name })).toHaveCount(0);
   const before = await (await page.request.get(`/api/claims/${claimId}`)).json();
@@ -434,3 +439,60 @@ test('history shows account names without roles and My claims has no currency fo
     await managerApi.dispose();
   }
 });
+
+for (const state of ['first submission', 'direct rejected resubmission', 'corrected draft resubmission']) {
+  test(`native confirmation for ${state}`, async ({ page }) => {
+    await page.goto('/');
+    const baseURL = new URL(page.url()).origin;
+    const employee = await request.newContext({ baseURL });
+    const manager = await request.newContext({ baseURL });
+    try {
+      for (const [context, username] of [[employee, 'employee'], [manager, 'manager']]) {
+        expect((await context.post('/api/auth/login', { data: { username, password: `${username}123` } })).ok()).toBeTruthy();
+      }
+      const payload = { title: `Confirmation ${randomUUID()}`, category: 'Travel', description: 'Confirmation fixture', expense_date: new Date().toISOString().slice(0, 10), amount_paise: 10000 };
+      const created = await employee.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: payload });
+      expect(created.status()).toBe(201);
+      const claim = await created.json();
+      if (state !== 'first submission') {
+        expect((await employee.post(`/api/claims/${claim.id}/submit`, { data: { version: claim.version } })).ok()).toBeTruthy();
+        expect((await manager.post(`/api/claims/${claim.id}/review`, { data: { version: 2, decision: 'REJECTED', comment: 'Please correct' } })).ok()).toBeTruthy();
+        if (state === 'corrected draft resubmission') {
+          expect((await employee.patch(`/api/claims/${claim.id}`, { data: { ...payload, description: 'Corrected fixture', version: 3 } })).ok()).toBeTruthy();
+        }
+      }
+      const before = await (await employee.get(`/api/claims/${claim.id}`)).json();
+      await signIn(page, 'employee');
+      await page.getByRole('button', { name: payload.title }).click();
+      await expect(page.getByRole('heading', { name: payload.title })).toBeVisible();
+      let submits = 0;
+      page.on('request', (req) => {
+        if (req.method() === 'POST' && new URL(req.url()).pathname === `/api/claims/${claim.id}/submit`) submits += 1;
+      });
+      const expectedPrompt = `Are you sure you want to ${state === 'first submission' ? 'submit' : 'resubmit'} this claim? You cannot edit it while it is under review.`;
+      let prompt;
+      page.once('dialog', async (dialog) => { prompt = { type: dialog.type(), message: dialog.message() }; await dialog.dismiss(); });
+      await page.getByRole('button', { name: 'Submit claim' }).click();
+      expect(prompt).toEqual({ type: 'confirm', message: expectedPrompt });
+      expect(submits).toBe(0);
+      expect(await (await employee.get(`/api/claims/${claim.id}`)).json()).toEqual(before);
+      await expect(page.getByRole('heading', { name: payload.title })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Submit claim' })).toBeVisible();
+
+      prompt = undefined;
+      page.once('dialog', async (dialog) => { prompt = { type: dialog.type(), message: dialog.message() }; await dialog.accept(); });
+      await page.getByRole('button', { name: 'Submit claim' }).click();
+      expect(prompt).toEqual({ type: 'confirm', message: expectedPrompt });
+      await expect(page.locator('.claim-detail .status-chip.status-submitted')).toBeVisible();
+      expect(submits).toBe(1);
+      const after = await (await employee.get(`/api/claims/${claim.id}`)).json();
+      expect(after.version).toBe(before.version + 1);
+      expect(after.history.slice(0, -1)).toEqual(before.history);
+      expect(after.history.at(-1).action).toBe('SUBMITTED');
+      expect(after.history.filter((event) => event.action === 'SUBMITTED')).toHaveLength(before.history.filter((event) => event.action === 'SUBMITTED').length + 1);
+    } finally {
+      await employee.dispose();
+      await manager.dispose();
+    }
+  });
+}
