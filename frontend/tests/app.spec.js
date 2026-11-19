@@ -23,7 +23,7 @@ test('unauthenticated visitors see sign in', async ({ page }) => {
 
 async function signIn(page, username) {
   await page.getByLabel('Username').fill(username);
-  await page.getByLabel('Password').fill(`${username}123`);
+  await page.getByLabel('Password').fill(username === 'manager' ? 'manager123' : 'employee123');
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page.getByRole('heading', { name: 'My claims' })).toBeVisible();
 }
@@ -33,7 +33,7 @@ async function switchUser(page, username) {
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'My claims' })).toHaveCount(0);
   await signIn(page, username);
-  if (username === 'approver') {
+  if (username === 'manager') {
     await expect(page.getByText('No claims yet')).toBeVisible();
     await page.getByRole('button', { name: 'Approvals', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Approvals' })).toBeVisible();
@@ -187,7 +187,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByRole('button', { name: 'Submit claim' }).click();
   await expect(page.locator('.claim-detail .status-chip.status-submitted')).toBeVisible();
 
-  await switchUser(page, 'approver');
+  await switchUser(page, 'manager');
   await page.getByRole('button', { name: /Airport taxi/ }).click();
   await expect(page.getByRole('heading', { name: 'Review this claim' })).toBeVisible();
   await page.getByLabel('Approved amount (₹)').fill('6500');
@@ -217,7 +217,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByRole('button', { name: 'Submit claim' }).click();
   await expect(page.locator('.claim-detail .status-chip.status-submitted')).toBeVisible();
 
-  await switchUser(page, 'approver');
+  await switchUser(page, 'manager');
   await page.getByRole('button', { name: /Hotel correction/ }).click();
   await page.getByRole('button', { name: 'Reject claim' }).click();
   await expect(page.getByRole('alert').filter({ hasText: 'Add a reason before rejecting this claim.' })).toBeVisible();
@@ -235,7 +235,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByRole('button', { name: 'Save changes' }).click();
   await expect(page.locator('.claim-detail .status-chip.status-draft')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Delete draft' })).toHaveCount(0);
-  await switchUser(page, 'approver');
+  await switchUser(page, 'manager');
   await page.getByRole('button', { name: 'Reviewed history' }).click();
   await page.getByRole('button', { name: /Hotel correction/ }).click();
   await expect(page.locator('.claim-detail .status-chip.status-draft')).toBeVisible();
@@ -245,7 +245,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByRole('button', { name: 'Submit claim' }).click();
   await expect(page.locator('.claim-detail .status-chip.status-submitted')).toBeVisible();
 
-  await switchUser(page, 'approver');
+  await switchUser(page, 'manager');
   await page.getByRole('button', { name: 'Reviewed history' }).click();
   await page.getByRole('button', { name: /Hotel correction/ }).click();
   await expect(page.getByRole('heading', { name: 'Review this claim' })).toBeVisible();
@@ -257,7 +257,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await expect(page.locator('.timeline-event time')).toHaveCount(6);
   await expect(page.locator('.timeline-heading strong').filter({ hasText: 'Rejected' })).toHaveCount(1);
   await expect(page.locator('.timeline-heading strong').filter({ hasText: 'Approved' })).toHaveCount(1);
-  await expect(page.locator('.event-actor').filter({ hasText: 'Approver' })).toHaveCount(2);
+  await expect(page.locator('.event-actor').filter({ hasText: 'Manager One' })).toHaveCount(2);
   await expect(page.getByText('Please check the submitted amount.')).toBeVisible();
   await page.getByRole('button', { name: 'Reviewed history' }).click();
   await expect(page.getByRole('button', { name: /Hotel correction/ })).toBeVisible();
@@ -276,7 +276,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   const claimId = Number(claimLabel.match(/#(\d+)/)[1]);
   await page.getByRole('button', { name: 'Submit claim' }).click();
 
-  await switchUser(page, 'approver');
+  await switchUser(page, 'manager');
   await page.getByRole('button', { name: /Stale review guard/ }).click();
   await expect(page.getByRole('heading', { name: 'Review this claim' })).toBeVisible();
   const claimResponse = await page.request.get(`/api/claims/${claimId}`);
@@ -299,7 +299,7 @@ test('employee and approver claim workflow', async ({ page }) => {
 
 test('approver owns claims but cannot review their own submission', async ({ page }) => {
   await page.goto('/');
-  await signIn(page, 'approver');
+  await signIn(page, 'manager');
   await expect(page.getByText('No claims yet')).toBeVisible();
   await page.getByRole('button', { name: 'New claim' }).click();
   await page.getByLabel('Claim title').fill('Approver own expense');
@@ -311,7 +311,7 @@ test('approver owns claims but cannot review their own submission', async ({ pag
   await expect(page.getByRole('button', { name: 'Edit draft' })).toBeVisible();
   const claimId = Number((await page.locator('.claim-detail .eyebrow').textContent()).match(/#(\d+)/)[1]);
   await page.getByRole('button', { name: 'Submit claim' }).click();
-  await expect(page.getByText('Another approver must review this claim.')).toBeVisible();
+  await expect(page.getByText('Another manager must review this claim.')).toBeVisible();
   for (const name of ['Approve claim', 'Reject claim', 'Mark as paid']) await expect(page.getByRole('button', { name })).toHaveCount(0);
   const before = await (await page.request.get(`/api/claims/${claimId}`)).json();
   const response = await page.request.post(`/api/claims/${claimId}/review`, { data: { version: before.version, decision: 'APPROVED', approved_amount_paise: 10000 } });
@@ -335,7 +335,7 @@ test('rapid workspace changes discard delayed real collection responses', async 
   const employeeApi = await request.newContext({ baseURL });
   let ownId;
   try {
-    for (const [context, username] of [[approverApi, 'approver'], [employeeApi, 'employee']]) {
+    for (const [context, username] of [[approverApi, 'manager'], [employeeApi, 'employee']]) {
       const login = await context.post('/api/auth/login', { data: { username, password: `${username}123` } });
       expect(login.ok()).toBeTruthy();
     }
@@ -356,7 +356,7 @@ test('rapid workspace changes discard delayed real collection responses', async 
     await approverApi.dispose();
     await employeeApi.dispose();
   }
-  await signIn(page, 'approver');
+  await signIn(page, 'manager');
   await expect(page.getByRole('button', { name: ownTitle })).toBeVisible();
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
@@ -400,4 +400,36 @@ test('rapid workspace changes discard delayed real collection responses', async 
   }
   await expect(page.getByRole('button', { name: otherTitle })).toBeVisible();
   await expect(page.getByRole('heading', { name: ownTitle })).toHaveCount(0);
+});
+
+test('history shows account names without roles and My claims has no currency footnote', async ({ page }) => {
+  await page.goto('/');
+  const baseURL = new URL(page.url()).origin;
+  const employeeApi = await request.newContext({ baseURL });
+  const managerApi = await request.newContext({ baseURL });
+  try {
+    for (const [context, username, password] of [
+      [employeeApi, 'employee', 'employee123'],
+      [managerApi, 'manager', 'manager123'],
+    ]) {
+      const login = await context.post('/api/auth/login', { data: { username, password } });
+      expect(login.ok()).toBeTruthy();
+    }
+    const created = await employeeApi.post('/api/claims', {
+      headers: { 'Idempotency-Key': randomUUID() },
+      data: { title: 'Naming regression', description: 'History names', category: 'Travel', expense_date: new Date().toISOString().slice(0, 10), amount_paise: 12500 },
+    });
+    expect(created.status()).toBe(201);
+    const claim = await created.json();
+    expect((await employeeApi.post(`/api/claims/${claim.id}/submit`, { data: { version: claim.version } })).ok()).toBeTruthy();
+    expect((await managerApi.post(`/api/claims/${claim.id}/review`, { data: { version: 2, decision: 'APPROVED', approved_amount_paise: 12500 } })).ok()).toBeTruthy();
+
+    await signIn(page, 'employee');
+    await page.getByRole('button', { name: 'Naming regression' }).click();
+    await expect(page.locator('.event-actor')).toHaveText(['Employee One', 'Employee One', 'Manager One']);
+    await expect(page.getByText('Amounts are shown in Indian rupees (INR).', { exact: true })).toHaveCount(0);
+  } finally {
+    await employeeApi.dispose();
+    await managerApi.dispose();
+  }
 });

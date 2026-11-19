@@ -72,7 +72,7 @@ function Login({ onLogin, busy, message }) {
           {message && <p className="auth-message" role="alert">{message}</p>}
           <button className="button button-primary" type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
         </form>
-        <div className="mock-accounts"><strong>Mock accounts</strong><p>Employee: employee / employee123</p><p>Approver: approver / approver123</p></div>
+        <div className="mock-accounts"><strong>Mock accounts</strong><p>Employee: employee / employee123</p><p>Manager: manager / manager123</p></div>
       </div>
     </main>
   );
@@ -171,7 +171,7 @@ function History({ events }) {
                   <strong>{actionLabel(event.action)}</strong>
                   <time dateTime={event.event_at}>{timeLabel(event.event_at)}</time>
                 </div>
-                <p className="event-actor">{event.actor_name} · {event.actor_role === 'APPROVER' ? 'Approver' : 'Employee'}</p>
+                <p className="event-actor">{event.actor_name}</p>
                 <p className="event-expense">
                   {event.title} · {event.category} · {dateLabel(event.expense_date)} · Requested {formatRupees(event.amount_paise)}
                   {event.approved_amount_paise !== null && event.approved_amount_paise !== undefined && (
@@ -686,7 +686,7 @@ export default function App() {
                 </table>
               </div>
             )}
-            <p className="list-footnote">{workspace === 'approvals' ? 'New drafts are private; previously reviewed corrections remain accessible.' : 'Amounts are shown in Indian rupees (INR).'}</p>
+            {workspace === 'approvals' && <p className="list-footnote">New drafts are private; previously reviewed corrections remain accessible.</p>}
           </section>
 
           <section className="detail-card" aria-labelledby="detail-heading">
@@ -740,10 +740,10 @@ export default function App() {
                 {detailError && !formMode && <div className="banner banner-error detail-banner" role="alert">{detailError}</div>}
 
                 {workspace === 'claims' && currentDetail.status === 'REJECTED' && (
-                  <div className="correction-note"><strong>Correction needed</strong><span>Review the approver’s comment in history, then edit and resubmit.</span></div>
+                  <div className="correction-note"><strong>Correction needed</strong><span>Review the feedback in history, then edit and resubmit.</span></div>
                 )}
 
-                {workspace === 'claims' && currentDetail.status === 'SUBMITTED' && <p className="readonly-hint">Another approver must review this claim.</p>}
+                {workspace === 'claims' && currentDetail.status === 'SUBMITTED' && <p className="readonly-hint">Another manager must review this claim.</p>}
                 {actions.includes('review') && (
                   <form className="review-panel" onSubmit={approveClaim}>
                     <h3>Review this claim</h3>

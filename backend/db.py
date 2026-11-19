@@ -10,7 +10,7 @@ DEFAULT_DB_PATH = Path(__file__).resolve().with_name("napho.sqlite3")
 
 SEED_USERS = (
     (1, "Employee One", "EMPLOYEE"),
-    (3, "Approver", "APPROVER"),
+    (3, "Manager One", "APPROVER"),
 )
 
 SCHEMA = """
@@ -90,6 +90,9 @@ class Database:
             connection.executemany(
                 "INSERT OR IGNORE INTO users (id, name, role) VALUES (?, ?, ?)",
                 SEED_USERS,
+            )
+            connection.execute(
+                "UPDATE users SET name = 'Manager One' WHERE id = 3 AND name = 'Approver' AND role = 'APPROVER'"
             )
         finally:
             connection.close()

@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi.testclient import TestClient
 
 from app import create_app
+from db import Database
 
 
 def test_auth_rejects_header_without_session(tmp_path):
@@ -26,6 +27,47 @@ def test_auth_login_session_and_invalid_password(tmp_path):
         assert browser.get("/api/auth/me").json() == login.json()
         assert browser.post("/api/auth/login", json={"username": "employee", "password": "wrong"}).status_code == 401
         assert browser.get("/api/auth/me").status_code == 401
+
+
+def test_legacy_manager_identity_migrates_without_changing_claim_or_events(tmp_path):
+    path = tmp_path / "legacy.sqlite3"
+    application = create_app(path)
+    with TestClient(application) as employee:
+        assert employee.post("/api/auth/login", json={"username": "employee", "password": "employee123"}).status_code == 200
+        claim = create_claim(employee).json()
+        assert submit_claim(employee, claim["id"], claim["version"]).status_code == 200
+    with TestClient(application) as manager:
+        assert manager.post("/api/auth/login", json={"username": "manager", "password": "manager123"}).status_code == 200
+        assert manager.post(f"/api/claims/{claim['id']}/review", json={"version": 2, "decision": "APPROVED", "approved_amount_paise": 12500}).status_code == 200
+        manager_cookie = manager.cookies.get("napho_session")
+
+    database = Database(path)
+    connection = database.connect()
+    try:
+        connection.execute("UPDATE users SET name = 'Approver' WHERE id = 3 AND name = 'Manager One' AND role = 'APPROVER'")
+        before_claim = tuple(connection.execute("SELECT * FROM claims WHERE id = ?", (claim["id"],)).fetchone())
+        before_events = [tuple(row) for row in connection.execute(
+            "SELECT * FROM claim_events WHERE claim_id = ? ORDER BY id", (claim["id"],)
+        ).fetchall()]
+    finally:
+        connection.close()
+    database.initialize()
+    database.initialize()
+
+    connection = database.connect()
+    try:
+        assert tuple(connection.execute("SELECT name, role FROM users WHERE id = 3").fetchone()) == ("Manager One", "APPROVER")
+        assert tuple(connection.execute("SELECT * FROM claims WHERE id = ?", (claim["id"],)).fetchone()) == before_claim
+        assert [tuple(row) for row in connection.execute(
+            "SELECT * FROM claim_events WHERE claim_id = ? ORDER BY id", (claim["id"],)
+        ).fetchall()] == before_events
+    finally:
+        connection.close()
+    with TestClient(create_app(path)) as manager:
+        manager.cookies.set("napho_session", manager_cookie)
+        assert manager.get("/api/auth/me").json()["name"] == "Manager One"
+        assert manager.post("/api/auth/login", json={"username": "manager", "password": "manager123"}).json()["name"] == "Manager One"
+        assert manager.get(f"/api/claims/{claim['id']}").json()["history"][2]["actor_name"] == "Manager One"
 
 
 def test_session_logout_tamper_validation_and_header_spoof(application, client, approver):
@@ -76,7 +118,7 @@ def client(application):
 @pytest.fixture
 def approver(application):
     with TestClient(application) as browser:
-        assert browser.post("/api/auth/login", json={"username": "approver", "password": "approver123"}).status_code == 200
+        assert browser.post("/api/auth/login", json={"username": "manager", "password": "manager123"}).status_code == 200
         yield browser
 
 
@@ -219,7 +261,7 @@ def test_partial_approval_and_payment_preserve_requested_amount(client: TestClie
 
     history = client.get(f"/api/claims/{claim_id}").json()["history"]
     assert [event["action"] for event in history] == ["CREATED", "SUBMITTED", "APPROVED", "PAID"]
-    assert history[2]["actor_name"] == "Approver"
+    assert history[2]["actor_name"] == "Manager One"
     assert history[2]["comment"] == "Within policy"
     assert history[2]["amount_paise"] == 10000
     assert history[2]["approved_amount_paise"] == 7500

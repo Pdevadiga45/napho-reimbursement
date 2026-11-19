@@ -25,7 +25,7 @@ MAX_AMOUNT_PAISE = 10_000_000_000
 MOCK_SESSION_SECRET = "napho-mock-development-only-session-secret"
 MOCK_ACCOUNTS = {
     "employee": ("employee123", 1, "Employee One", "EMPLOYEE"),
-    "approver": ("approver123", 3, "Approver", "APPROVER"),
+    "manager": ("manager123", 3, "Manager One", "APPROVER"),
 }
 
 

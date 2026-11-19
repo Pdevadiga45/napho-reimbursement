@@ -32,7 +32,7 @@ Open http://127.0.0.1:5173 and sign in with either mock account:
 | Role | Username | Password |
 | --- | --- | --- |
 | Employee | `employee` | `employee123` |
-| Approver | `approver` | `approver123` |
+| Manager | `manager` | `manager123` |
 
 API documentation is
 at http://127.0.0.1:8000/docs. Vite proxies `/api` to the backend; set
@@ -71,11 +71,11 @@ constraining each action, rather than a general role-management framework.
 | Account | Own claims | Other users' claims |
 | --- | --- | --- |
 | Employee | Create, edit, submit and track | No approvals access |
-| Approver | Create, edit, submit and track | Review submitted claims and mark approved claims paid |
+| Manager | Create, edit, submit and track | Review submitted claims and mark approved claims paid |
 
-Both accounts are claimants. An approver cannot review or pay their own claim;
-with the current two mock accounts, an approver's own submission needs another
-approver before it can be completed. Draft deletion and other actions also depend
+Both accounts are claimants. The manager cannot review or pay their own claim;
+with the current two mock accounts, the manager's own submission needs another
+manager before it can be completed. Draft deletion and other actions also depend
 on claim state and history. These principles are inspired by [Ramp's user roles](https://support.ramp.com/hc/en-us/articles/360042579734-What-are-the-types-of-Ramp-users-), [Ramp's approval policies](https://support.ramp.com/hc/en-us/articles/27132114712723-Setting-up-expense-approval-policies-transactions-and-reimbursements), and [Expensify's expense and report actions](https://help.expensify.com/articles/new-expensify/reports-and-expenses/Expense-and-Report-Actions).
 
 Each expense is one claim. SQLite stores users, claims, and immutable claim event
