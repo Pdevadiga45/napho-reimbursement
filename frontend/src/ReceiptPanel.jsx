@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-export function ReceiptPicker({ onFile, busy, inputRef }) {
+export function ReceiptPicker({ file, onFile, busy, inputRef }) {
   const [error, setError] = useState('');
   function choose(event) {
     const selected = event.target.files?.[0] || null;
@@ -13,33 +13,30 @@ export function ReceiptPicker({ onFile, busy, inputRef }) {
       setError('Receipt must be no larger than 5 MB.');
     } else onFile(selected);
   }
+  function clear() {
+    onFile(null);
+    setError('');
+    if (inputRef.current) inputRef.current.value = '';
+  }
   return <div className="receipt-picker">
-    <label>Choose receipt<input ref={inputRef} type="file" accept=".jpg,.jpeg,.png,.pdf" onChange={choose} disabled={busy} /></label>
-    <p className="label-help">PNG, JPG, JPEG or PDF, up to 5 MB (5,000,000 bytes); images up to 20 MP and PDFs up to 10 unencrypted pages.</p>
+    <label>Choose receipt (mandatory)<input ref={inputRef} type="file" accept=".jpg,.jpeg,.png,.pdf" onChange={choose} disabled={busy} /></label>
+    <p className="label-help">PNG/JPG/PDF · Max 5 MB · Images 20 MP · PDFs 10 pages (no password)</p>
+    {(file || error) && <div className="receipt-selection">{file && <span>{file.name}</span>}<button type="button" aria-label="Clear selected receipt" disabled={busy} onClick={clear}>×</button></div>}
     {error && <p className="form-error" role="alert">{error}</p>}
   </div>;
 }
 
-export default function ReceiptPanel({ claim, editable, busy, onUpload, onRemove }) {
-  const [file, setFile] = useState(null);
+export default function ReceiptPanel({ claim, editable, busy, onRemove }) {
   const receipt = claim.receipt;
   const url = receipt && `/api/claims/${claim.id}/receipts/${receipt.id}`;
 
   return <section className="receipt-panel" aria-labelledby="receipt-heading">
     <h3 id="receipt-heading">Receipt</h3>
-    {editable && <p className="label-help">A receipt is required before submission or resubmission.</p>}
     {receipt ? <div className="receipt-current">
       <p>{receipt.filename}</p>
       {receipt.content_type.startsWith('image/') && <img src={url} alt="Receipt preview" />}
       <a href={url}>{receipt.content_type === 'application/pdf' ? 'Download receipt' : 'View receipt'}</a>
     </div> : <p>No receipt attached</p>}
-    {editable && <div className="receipt-upload">
-      <ReceiptPicker onFile={setFile} busy={busy} />
-      {file && <p>Selected: {file.name}</p>}
-      <div className="form-actions">
-        <button className="button button-secondary" type="button" disabled={busy || !file} onClick={async () => { if (await onUpload(file)) setFile(null); }}>{receipt ? 'Replace receipt' : 'Attach receipt'}</button>
-        {receipt && <button className="button button-danger-text" type="button" disabled={busy} onClick={onRemove}>Remove receipt</button>}
-      </div>
-    </div>}
+    {editable && receipt && <button className="button button-danger-text" type="button" disabled={busy} onClick={onRemove}>Remove receipt</button>}
   </section>;
 }

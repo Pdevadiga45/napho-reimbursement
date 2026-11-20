@@ -46,7 +46,7 @@ function parseLocalInput(value) {
 }
 function formatLocalDateTime(date) {
   const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${String(date.getMilliseconds()).padStart(3, '0')}`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 function localWallKey(value) {
   const date = parseLocalInput(value);
@@ -165,18 +165,13 @@ function sameClaimContents(a, b) {
     && (a.receipt?.id ?? null) === (b.receipt?.id ?? null);
 }
 
-function ClaimForm({ values, onChange, onSubmit, onCancel, submitLabel, error, busy, saving, onFile, inputRef }) {
+function ClaimForm({ values, onChange, onSubmit, onCancel, submitLabel, error, busy, saving, file, onFile, inputRef }) {
   const update = (field) => (event) => onChange({ ...values, [field]: event.target.value });
   return (
     <form className="claim-form" onSubmit={onSubmit}>
       <div className="form-heading">
         <h3>{submitLabel === 'Save as draft' ? 'New expense claim' : 'Claim details'}</h3>
-        <p>Enter one INR expense. You can review a draft before submitting.</p>
       </div>
-      <label>
-        Claim title
-        <input maxLength="120" name="title" value={values.title} onChange={update('title')} required />
-      </label>
       <label>
         Category
         <select name="category" value={values.category} onChange={update('category')} required>
@@ -185,10 +180,14 @@ function ClaimForm({ values, onChange, onSubmit, onCancel, submitLabel, error, b
         </select>
         {values.originalCategory && <span className="label-help">Original category: {values.originalCategory}. Choose a current category.</span>}
       </label>
-      <ReceiptPicker onFile={onFile} busy={busy} inputRef={inputRef} />
+      <ReceiptPicker file={file} onFile={onFile} busy={busy} inputRef={inputRef} />
+      <label>
+        Claim title
+        <input maxLength="120" name="title" value={values.title} onChange={update('title')} required />
+      </label>
       <label>
         Expense date and time
-        <input type="datetime-local" step="0.001" name="expense_date" value={values.expense_date} onChange={update('expense_date')} required />
+        <input type="datetime-local" step="60" name="expense_date" value={values.expense_date} onChange={update('expense_date')} required />
         {values.originalDate && <span className="label-help">Original date: {values.originalDate}; time was not recorded. Enter a time.</span>}
       </label>
       <label>
@@ -702,16 +701,6 @@ export default function App() {
     }
   }
 
-  async function uploadReceipt(file) {
-    if (!currentDetail || authBusy || pendingMutation) return null;
-    const snapshot = { id: currentDetail.id, version: currentDetail.version, userId, workspace };
-    return runMutation('Uploading receipt',
-      () => api(`/api/claims/${snapshot.id}/receipt?version=${snapshot.version}&filename=${encodeURIComponent(file.name)}`, snapshot.userId, {
-        method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file,
-      }),
-      'Receipt saved.');
-  }
-
   async function approveClaim(event) {
     event.preventDefault();
     if (!currentDetail) return;
@@ -977,7 +966,8 @@ export default function App() {
                 error={formError}
                 busy={authBusy || Boolean(pendingMutation)}
                 saving={Boolean(pendingMutation)}
-                onFile={(file) => { setFormFile(file); if (file) setFormError((message) => message === 'Choose a receipt before submitting.' ? '' : message); }}
+                file={formFile}
+                onFile={(file) => { setFormFile(file); setFormError((message) => message === 'Choose a receipt before submitting.' ? '' : message); }}
                 inputRef={receiptInput}
               />
             ) : detailLoading ? (
@@ -1017,7 +1007,7 @@ export default function App() {
                   <div className="description-fact"><dt>Business purpose / expense details</dt><dd>{currentDetail.description}</dd></div>
                 </dl>
 
-                <ReceiptPanel key={`${scopeKey}:${currentDetail.id}:${currentDetail.version}`} claim={currentDetail} editable={actions.includes('edit')} busy={authBusy || Boolean(pendingMutation)} onUpload={uploadReceipt} onRemove={(event) => openConfirmation('removeReceipt', event)} />
+                <ReceiptPanel key={`${scopeKey}:${currentDetail.id}:${currentDetail.version}`} claim={currentDetail} editable={actions.includes('edit')} busy={authBusy || Boolean(pendingMutation)} onRemove={(event) => openConfirmation('removeReceipt', event)} />
 
                 {detailError && !formMode && <div className="banner banner-error detail-banner" role="alert">{detailError}</div>}
 
@@ -1059,8 +1049,7 @@ export default function App() {
                     {actions.includes('delete') && <button className="button button-danger-text" type="button" onClick={(event) => openConfirmation('delete', event)} disabled={authBusy || Boolean(pendingMutation)}>{pendingMutation === 'Deleting draft' ? 'Deleting…' : 'Delete draft'}</button>}
                   </div>
                 )}
-                {actions.includes('submit') && (currentDetail.submission_errors || []).map((message) => <p className="readonly-hint" key={message}>{message}</p>)}
-                {actions.includes('submit') && currentDetail.status === 'DRAFT' && <p className="readonly-hint">Once submitted, this claim is locked while it is under review.</p>}
+                {actions.includes('submit') && (currentDetail.submission_errors || []).filter((message) => message !== 'Attach a receipt before submitting').map((message) => <p className="readonly-hint" key={message}>{message}</p>)}
                 <History events={currentDetail.history || []} claimId={currentDetail.id} />
               </article>
             )}
