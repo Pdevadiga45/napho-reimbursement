@@ -23,17 +23,38 @@ def fetch_claim(connection: sqlite3.Connection, claim_id: int) -> sqlite3.Row | 
     return connection.execute(CLAIM_PROJECTION + " WHERE c.id = ?", (claim_id,)).fetchone()
 
 
-def list_claims(connection: sqlite3.Connection, owner_id: int) -> list[sqlite3.Row]:
-    return connection.execute(CLAIM_PROJECTION +
-        " WHERE c.owner_id = ? ORDER BY c.created_at DESC, c.id DESC", (owner_id,)).fetchall()
+PAGE_SIZE = 10
+OWNER_SCOPE = "c.owner_id = ?"
+APPROVAL_SCOPE = """c.owner_id <> ? AND (c.status <> 'DRAFT' OR EXISTS (
+    SELECT 1 FROM claim_events e WHERE e.claim_id = c.id
+    AND e.action IN ('APPROVED', 'REJECTED')))"""
 
 
-def list_approvals(connection: sqlite3.Connection, user_id: int) -> list[sqlite3.Row]:
-    return connection.execute(CLAIM_PROJECTION + """
-        WHERE c.owner_id <> ? AND (c.status <> 'DRAFT' OR EXISTS (
-            SELECT 1 FROM claim_events e WHERE e.claim_id = c.id
-            AND e.action IN ('APPROVED', 'REJECTED')))
-        ORDER BY c.created_at DESC, c.id DESC""", (user_id,)).fetchall()
+def _list_page(connection: sqlite3.Connection, scope: str, user_id: int,
+               page: int, status: str | None) -> tuple[list[sqlite3.Row], int]:
+    where = " WHERE " + scope
+    params: tuple[Any, ...] = (user_id,)
+    if status is not None:
+        where += " AND c.status = ?"
+        params += (status,)
+    # Both queries read the same snapshot even if another request writes between them.
+    connection.execute("BEGIN")
+    total = connection.execute("SELECT COUNT(*) FROM claims c" + where, params).fetchone()[0]
+    rows = connection.execute(
+        CLAIM_PROJECTION + where + " ORDER BY c.created_at DESC, c.id DESC LIMIT ? OFFSET ?",
+        params + (PAGE_SIZE, (page - 1) * PAGE_SIZE),
+    ).fetchall()
+    return rows, total
+
+
+def list_claims(connection: sqlite3.Connection, owner_id: int, page: int,
+                status: str | None) -> tuple[list[sqlite3.Row], int]:
+    return _list_page(connection, OWNER_SCOPE, owner_id, page, status)
+
+
+def list_approvals(connection: sqlite3.Connection, user_id: int, page: int,
+                   status: str | None) -> tuple[list[sqlite3.Row], int]:
+    return _list_page(connection, APPROVAL_SCOPE, user_id, page, status)
 
 
 def find_creation(connection: sqlite3.Connection, owner_id: int, key: str) -> sqlite3.Row | None:

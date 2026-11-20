@@ -85,8 +85,8 @@ async function submitClaim(page) {
 
 const receiptPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aKsAAAAASUVORK5CYII=', 'base64');
 async function attachReceipt(page) {
-  await page.getByLabel('Choose receipt').setInputFiles({ name: 'bill.png', mimeType: 'image/png', buffer: receiptPng });
-  await page.getByRole('button', { name: 'Attach receipt' }).click();
+  await page.locator('.receipt-panel').getByLabel('Choose receipt').setInputFiles({ name: 'bill.png', mimeType: 'image/png', buffer: receiptPng });
+  await page.locator('.receipt-panel').getByRole('button', { name: 'Attach receipt' }).click();
   await expect(page.getByRole('img', { name: 'Receipt preview' })).toBeVisible();
 }
 async function attachApiReceipt(context, claim) {
@@ -137,7 +137,7 @@ test('pending logout prevents draft creation', async ({ page }) => {
   try {
     await page.getByRole('button', { name: 'Log out' }).click();
     await logoutRequest;
-    await expect.soft(page.getByRole('button', { name: 'Create draft' })).toBeDisabled({ timeout: 1000 });
+    await expect.soft(page.getByRole('button', { name: 'Save as draft' })).toBeDisabled({ timeout: 1000 });
     await page.locator('.claim-form').evaluate((form) => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
     await page.waitForTimeout(300);
     expect.soft(claimPosts).toBe(0);
@@ -173,7 +173,7 @@ test('sign in, restore, log out and expire a session', async ({ page }) => {
   await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
   await page.getByLabel('Requested amount (₹)').fill('10');
   await page.getByLabel('Business purpose / expense details').fill('Session expiry check');
-  await page.getByRole('button', { name: 'Create draft' }).click();
+  await page.getByRole('button', { name: 'Save as draft' }).click();
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
   await expect(page.getByRole('alert')).toContainText('session has expired');
 });
@@ -228,16 +228,16 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByLabel('Expense date and time').fill(expenseDate);
   await page.getByLabel('Requested amount (₹)').fill('900');
   await page.getByLabel('Business purpose / expense details').fill('Temporary draft to check edit and delete.');
-  await page.getByRole('button', { name: 'Create draft' }).click();
+  await page.getByRole('button', { name: 'Save as draft' }).click();
   await expect(page.locator('.form-error')).toContainText('fetch');
-  await page.getByRole('button', { name: 'Create draft' }).click();
+  await page.getByRole('button', { name: 'Save as draft' }).click();
   await expect(page.locator('.form-error')).toContainText('fetch');
   await page.getByLabel('Claim title').fill('Office supplies sample revised');
-  await page.getByRole('button', { name: 'Create draft' }).click();
+  await page.getByRole('button', { name: 'Save as draft' }).click();
   await page.unroute('**/api/claims', failFirstTwoCreates);
   expect(idempotencyKeys).toHaveLength(3);
   expect(idempotencyKeys[0]).toBe(idempotencyKeys[1]);
-  expect(idempotencyKeys[2]).not.toBe(idempotencyKeys[1]);
+  expect(idempotencyKeys[2]).toBe(idempotencyKeys[1]);
   await expect(page.locator('.claim-detail .status-chip.status-draft')).toBeVisible();
   await page.getByRole('button', { name: 'Edit draft' }).click();
   await page.getByLabel('Requested amount (₹)').fill('950');
@@ -254,7 +254,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByLabel('Expense date and time').fill(expenseDate);
   await page.getByLabel('Requested amount (₹)').fill('8000');
   await page.getByLabel('Business purpose / expense details').fill('Airport transfer for a client visit.');
-  await page.getByRole('button', { name: 'Create draft' }).click();
+  await page.getByRole('button', { name: 'Save as draft' }).click();
   await expect(page.getByRole('heading', { name: 'Airport taxi' })).toBeVisible();
   await attachReceipt(page);
   await submitClaim(page);
@@ -287,7 +287,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByLabel('Expense date and time').fill(expenseDate);
   await page.getByLabel('Requested amount (₹)').fill('2000');
   await page.getByLabel('Business purpose / expense details').fill('Hotel stay during a work trip.');
-  await page.getByRole('button', { name: 'Create draft' }).click();
+  await page.getByRole('button', { name: 'Save as draft' }).click();
   await attachReceipt(page);
   await submitClaim(page);
   await expect(page.locator('.claim-detail .status-chip.status-submitted')).toBeVisible();
@@ -346,7 +346,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByLabel('Expense date and time').fill(expenseDate);
   await page.getByLabel('Requested amount (₹)').fill('100');
   await page.getByLabel('Business purpose / expense details').fill('Verify that a stale approval is not replayed.');
-  await page.getByRole('button', { name: 'Create draft' }).click();
+  await page.getByRole('button', { name: 'Save as draft' }).click();
   await expect(page.getByRole('heading', { name: 'Stale review guard' })).toBeVisible();
   const claimLabel = await page.locator('.claim-detail .eyebrow').textContent();
   const claimId = Number(claimLabel.match(/#(\d+)/)[1]);
@@ -384,7 +384,7 @@ test('approver owns claims but cannot review their own submission', async ({ pag
   await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
   await page.getByLabel('Requested amount (₹)').fill('100');
   await page.getByLabel('Business purpose / expense details').fill('Own expense');
-  await page.getByRole('button', { name: 'Create draft' }).click();
+  await page.getByRole('button', { name: 'Save as draft' }).click();
   await expect(page.getByRole('button', { name: 'Edit draft' })).toBeVisible();
   const claimId = Number((await page.locator('.claim-detail .eyebrow').textContent()).match(/#(\d+)/)[1]);
   await attachReceipt(page);
@@ -441,7 +441,7 @@ test('rapid workspace changes discard delayed real collection responses', async 
   const gate = new Promise((resolve) => { release = resolve; });
   let started;
   const requested = new Promise((resolve) => { started = resolve; });
-  await page.route('**/api/approvals', async (route) => {
+  await page.route('**/api/approvals?*', async (route) => {
     const response = await route.fetch();
     started();
     await gate;
@@ -457,7 +457,7 @@ test('rapid workspace changes discard delayed real collection responses', async 
   await expect(page.getByRole('navigation', { name: 'Workspaces' }).getByRole('button', { name: 'My claims' })).toHaveAttribute('aria-current', 'page');
   await expect(page.getByRole('button', { name: ownTitle })).toBeVisible();
   await expect(page.getByRole('button', { name: otherTitle })).toHaveCount(0);
-  await page.unroute('**/api/approvals');
+  await page.unroute('**/api/approvals?*');
   await page.getByRole('button', { name: 'Approvals', exact: true }).click();
   await expect(page.getByRole('button', { name: otherTitle })).toBeVisible();
   let releaseDetail;
@@ -641,7 +641,7 @@ test('receipt attaches to a merchant draft', async ({ page }) => {
   await page.getByLabel('Requested amount (₹)').fill('100');
   await page.getByLabel('Business purpose / expense details').fill('Client visit');
   await page.getByLabel('Merchant').fill('Example shop');
-  await page.getByRole('button', { name: 'Create draft' }).click();
+  await page.getByRole('button', { name: 'Save as draft' }).click();
   await expect(page.getByText('Example shop', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Receipt', exact: true })).toBeVisible();
   await page.getByLabel('Choose receipt').setInputFiles({ name: 'bill.png', mimeType: 'image/png', buffer: png });
@@ -731,7 +731,7 @@ test('receipt guidance blocks submission until attached', async ({ page }) => {
     await page.getByLabel('Requested amount (₹)').fill('100');
     await page.getByLabel('Business purpose / expense details').fill('Receipt guidance');
     const createdResponse = page.waitForResponse((response) => response.url().endsWith('/api/claims') && response.request().method() === 'POST');
-    await page.getByRole('button', { name: 'Create draft' }).click();
+    await page.getByRole('button', { name: 'Save as draft' }).click();
     const created = await createdResponse;
     expect(created.status()).toBe(201);
     await expect(page.getByRole('heading', { name: title })).toBeVisible();
@@ -776,7 +776,7 @@ test('local expense time round trips without changing its instant', async ({ bro
     await page.getByLabel('Requested amount (₹)').fill('100');
     await page.getByLabel('Business purpose / expense details').fill('Timezone fixture');
     const response = page.waitForResponse((r) => r.url().endsWith('/api/claims') && r.request().method() === 'POST');
-    await page.getByRole('button', { name: 'Create draft' }).click();
+    await page.getByRole('button', { name: 'Save as draft' }).click();
     const created = await (await response).json();
     expect(new Date(created.expense_date).toISOString()).toBe('2020-01-02T05:00:25.000Z');
     await expect(page.locator('.claim-facts')).toContainText('10:30:25');
@@ -806,7 +806,7 @@ test('nonexistent local expense time is rejected without creating a draft', asyn
     await page.getByLabel('Expense date and time').fill('2025-03-09T02:30');
     await page.getByLabel('Requested amount (₹)').fill('100');
     await page.getByLabel('Business purpose / expense details').fill('Nonexistent local clock regression');
-    await page.getByRole('button', { name: 'Create draft' }).click();
+    await page.getByRole('button', { name: 'Save as draft' }).click();
     await expect.soft(page.getByRole('alert')).toContainText(/valid expense date and time/i, { timeout: 1000 });
     await expect.soft(page.locator('.claim-form')).toBeVisible();
     expect.soft(createRequests).toBe(0);
@@ -866,7 +866,7 @@ test('legacy date and category remain visible and require correction', async ({ 
       if (!category) return claim;
       return { ...claim, category, expense_date: '2019-04-03', ...(claim.history ? { history: claim.history.map((event) => ({ ...event, category, expense_date: '2019-04-03' })) } : {}) };
     };
-    await page.route('**/api/claims', async (route) => {
+    await page.route('**/api/claims?*', async (route) => {
       if (route.request().method() !== 'GET') return route.continue();
       const response = await route.fetch();
       const claims = await response.json();
@@ -899,4 +899,380 @@ test('legacy date and category remain visible and require correction', async ({ 
       await page.getByRole('button', { name: 'Cancel' }).click();
     }
   } finally { await employee.dispose(); }
+});
+
+test('pagination uses server pages and status totals', async ({ page }) => {
+  await page.goto('/');
+  const employee = await request.newContext({ baseURL: new URL(page.url()).origin });
+  const created = [];
+  try {
+    await employee.post('/api/auth/login', { data: { username: 'employee', password: 'employee123' } });
+    const prefix = `Page ${randomUUID()}`;
+    for (let i = 0; i < 12; i++) {
+      const response = await employee.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: { title: `${prefix} ${i}`, category: 'meals', description: 'Pagination', expense_date: '2020-01-02T10:00:00Z', amount_paise: 100 } });
+      expect(response.ok()).toBeTruthy();
+      created.push(await response.json());
+    }
+    const listResponse = page.waitForResponse(r => new URL(r.url()).pathname === '/api/claims' && r.request().method() === 'GET');
+    await signIn(page, 'employee');
+    const total = Number((await listResponse).headers()['x-total-count']);
+    await expect(page.locator('.claims-table tbody tr')).toHaveCount(10);
+    await expect(page.locator('.claim-select').filter({ hasText: prefix })).toHaveCount(10);
+    await expect(page.locator('.pagination')).toContainText(`1–10 of ${total}`);
+    await page.getByRole('button', { name: 'Next' }).click();
+    await expect(page.locator('.pagination')).toContainText(`11–${Math.min(20, total)} of ${total}`);
+    await expect(page.locator('.claims-table tbody tr')).toHaveCount(Math.min(10, total - 10));
+    await expect(page.locator('.claim-select').filter({ hasText: prefix })).toHaveCount(2);
+    await page.getByRole('button', { name: 'Previous' }).click();
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    let started;
+    const requested = new Promise(resolve => { started = resolve; });
+    let finished;
+    const staleFinished = new Promise(resolve => { finished = resolve; });
+    await page.route('**/api/claims?*', async route => {
+      const url = new URL(route.request().url());
+      if (url.searchParams.get('status') !== 'DRAFT') return route.continue();
+      const response = await route.fetch();
+      started();
+      await gate;
+      await route.fulfill({ response }).catch(() => {});
+      finished();
+    });
+    await page.getByRole('button', { name: 'Drafts' }).click();
+    await requested;
+    const submittedResponse = page.waitForResponse(r => new URL(r.url()).searchParams.get('status') === 'SUBMITTED');
+    await page.getByRole('button', { name: 'Submitted', exact: true }).click();
+    const filtered = await submittedResponse;
+    const submittedTotal = Number(filtered.headers()['x-total-count']);
+    expect((await filtered.json()).every(claim => claim.status === 'SUBMITTED')).toBeTruthy();
+    release();
+    await staleFinished;
+    await expect(page.locator('.count-pill')).toHaveText(String(submittedTotal));
+    await expect(page.locator('.pagination')).toContainText('Page 1');
+    await expect(page.getByRole('button', { name: 'Submitted', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('.claim-select').filter({ hasText: prefix })).toHaveCount(0);
+    for (const claim of created.slice(0, 11)) {
+      const withReceipt = await attachApiReceipt(employee, claim);
+      expect((await employee.post(`/api/claims/${claim.id}/submit`, { data: { version: withReceipt.version } })).ok()).toBeTruthy();
+    }
+    await page.getByRole('button', { name: 'Log out' }).click();
+    await signIn(page, 'manager');
+    const approvalsResponse = page.waitForResponse(r => new URL(r.url()).pathname === '/api/approvals' && r.request().method() === 'GET');
+    await page.getByRole('button', { name: 'Approvals', exact: true }).click();
+    const approvals = await approvalsResponse;
+    const approvalsTotal = Number(approvals.headers()['x-total-count']);
+    await expect(page.locator('.pagination')).toContainText(`1–10 of ${approvalsTotal}`);
+    await expect(page.locator('.claims-table tbody tr')).toHaveCount(10);
+    await expect(page.locator('.claim-select').filter({ hasText: prefix })).toHaveCount(10);
+    await page.getByRole('button', { name: 'Next' }).click();
+    await expect(page.locator('.pagination')).toContainText(`11–${Math.min(20, approvalsTotal)} of ${approvalsTotal}`);
+    await expect(page.locator('.claim-select').filter({ hasText: prefix })).toHaveCount(1);
+  } finally {
+    for (const claim of created) await employee.delete(`/api/claims/${claim.id}?version=${claim.version}`);
+    await employee.dispose();
+  }
+});
+
+test('upfront receipt submission validates before mutation and retries upload', async ({ page }, testInfo) => {
+  await page.goto('/');
+  await signIn(page, 'employee');
+  await page.getByRole('button', { name: 'New claim' }).click();
+  expect(await page.locator('.claim-form').evaluate(form => {
+    const fields = [...form.querySelectorAll('select, input')];
+    return fields.findIndex(field => field.type === 'file') === fields.findIndex(field => field.name === 'category') + 1
+      && fields.findIndex(field => field.name === 'expense_date') === fields.findIndex(field => field.type === 'file') + 1;
+  })).toBeTruthy();
+  const title = `Upfront ${randomUUID()}`;
+  await page.getByLabel('Claim title').fill(title);
+  await page.getByLabel('Category').selectOption('meals');
+  await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+  await page.getByLabel('Requested amount (₹)').fill('100');
+  await page.getByLabel('Business purpose / expense details').fill('Upfront receipt');
+  const mutations = [];
+  page.on('request', req => { if (req.method() !== 'GET' && new URL(req.url()).pathname.startsWith('/api/claims')) mutations.push(req); });
+  await page.getByRole('button', { name: 'Submit', exact: true }).click();
+  await expect(page.getByLabel('Choose receipt')).toBeFocused();
+  expect(mutations).toHaveLength(0);
+  await page.getByLabel('Choose receipt').setInputFiles({ name: 'bill.png', mimeType: 'image/png', buffer: receiptPng });
+  await expect(page.locator('.claim-form')).not.toContainText('Choose a receipt before submitting.');
+  await page.screenshot({ path: testInfo.outputPath('upfront-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: testInfo.outputPath('upfront-mobile.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Submit', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
+  expect(mutations).toHaveLength(0);
+  let fail = true;
+  await page.route('**/api/claims/*/receipt?*', async route => {
+    if (fail && route.request().method() === 'POST') { fail = false; await route.fulfill({ status: 503, json: { detail: 'Upload failed' } }); }
+    else await route.continue();
+  });
+  await page.getByRole('button', { name: 'Submit', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Submit claim' }).click();
+  await expect(page.getByRole('alert')).toContainText('Upload failed');
+  await page.getByRole('button', { name: 'Submit', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Submit claim' }).click();
+  await expect(page.locator('.claim-detail .status-chip.status-submitted')).toBeVisible();
+  expect(mutations.filter(req => req.method() === 'POST' && new URL(req.url()).pathname === '/api/claims')).toHaveLength(1);
+  expect(mutations.filter(req => req.method() === 'POST' && new URL(req.url()).pathname.endsWith('/submit'))).toHaveLength(1);
+  await page.screenshot({ path: testInfo.outputPath('saved-mobile.png'), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.screenshot({ path: testInfo.outputPath('saved-desktop.png'), fullPage: true });
+  await page.getByRole('button', { name: 'New claim' }).click();
+  await page.getByLabel('Claim title').fill(`Draft with receipt ${randomUUID()}`);
+  await page.getByLabel('Category').selectOption('meals');
+  await page.getByLabel('Choose receipt').setInputFiles({ name: 'draft.png', mimeType: 'image/png', buffer: receiptPng });
+  await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+  await page.getByLabel('Requested amount (₹)').fill('10');
+  await page.getByLabel('Business purpose / expense details').fill('Draft receipt');
+  await page.getByRole('button', { name: 'Save as draft' }).click();
+  await expect(page.locator('.receipt-current')).toContainText('draft.png');
+  await expect(page.locator('.claim-detail .status-chip.status-draft')).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('editable-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: testInfo.outputPath('editable-mobile.png'), fullPage: true });
+});
+
+for (const lost of ['create', 'patch', 'rejected patch', 'upload', 'submit', 'create external unchanged', 'create external edited']) {
+  test(`form recovers a lost ${lost} response without duplicate mutation`, async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'employee');
+    await page.getByRole('button', { name: 'New claim' }).click();
+    const title = `Lost ${lost} ${randomUUID()}`;
+    await page.getByLabel('Claim title').fill(title);
+    await page.getByLabel('Category').selectOption('meals');
+    await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+    await page.getByLabel('Requested amount (₹)').fill('100');
+    await page.getByLabel('Business purpose / expense details').fill('Lost response control');
+    if (lost === 'upload' || lost === 'submit') await page.getByLabel('Choose receipt').setInputFiles({ name: 'bill.png', mimeType: 'image/png', buffer: receiptPng });
+    if (lost === 'patch' || lost === 'rejected patch') {
+      await page.getByRole('button', { name: 'Save as draft' }).click();
+      if (lost === 'rejected patch') {
+        const id = Number((await page.locator('.claim-detail .eyebrow').textContent()).match(/#(\d+)/)[1]);
+        const claim = await (await page.request.get(`/api/claims/${id}`)).json();
+        const withReceipt = await attachApiReceipt(page.request, claim);
+        const submitted = await (await page.request.post(`/api/claims/${id}/submit`, { data: { version: withReceipt.version } })).json();
+        const manager = await request.newContext({ baseURL: new URL(page.url()).origin });
+        try {
+          expect((await manager.post('/api/auth/login', { data: { username: 'manager', password: 'manager123' } })).ok()).toBeTruthy();
+          expect((await manager.post(`/api/claims/${id}/review`, { data: { version: submitted.version, decision: 'REJECTED', comment: 'Correct this claim' } })).ok()).toBeTruthy();
+        } finally { await manager.dispose(); }
+        await page.reload();
+        await page.getByRole('button', { name: title }).click();
+      }
+      await page.getByRole('button', { name: lost === 'patch' ? 'Edit draft' : 'Edit correction' }).click();
+      await page.getByLabel('Merchant').fill('Reconciled edit');
+      if (lost === 'rejected patch') await page.getByLabel('Choose receipt').setInputFiles({ name: 'corrected.png', mimeType: 'image/png', buffer: receiptPng });
+    }
+    let committed;
+    let uploadCount = 0;
+    let submitCount = 0;
+    let patchCount = 0;
+    let submittedVersion;
+    await page.route('**/api/claims**', async route => {
+      const req = route.request();
+      const path = new URL(req.url()).pathname;
+      if (req.method() === 'PATCH' && /\/api\/claims\/\d+$/.test(path)) patchCount++;
+      if (req.method() === 'POST' && path.endsWith('/receipt')) uploadCount++;
+      if (req.method() === 'POST' && path.endsWith('/submit')) { submitCount++; submittedVersion = req.postDataJSON().version; }
+      const target = lost.startsWith('create') ? req.method() === 'POST' && path === '/api/claims'
+        : lost.endsWith('patch') ? req.method() === 'PATCH' && /\/api\/claims\/\d+$/.test(path)
+          : req.method() === 'POST' && path.endsWith(lost === 'upload' ? '/receipt' : '/submit');
+      if (!committed && target) {
+        const response = await route.fetch();
+        expect(response.ok()).toBeTruthy();
+        committed = await response.json();
+        return route.abort();
+      }
+      return route.continue();
+    });
+    if (lost.startsWith('create')) {
+      await page.getByRole('button', { name: 'Save as draft' }).click();
+      await expect(page.locator('.form-error')).toBeVisible();
+      if (lost !== 'create') {
+        const externalResponse = await page.request.patch(`/api/claims/${committed.id}`, { data: { title, category: 'meals', description: 'Lost response control', expense_date: committed.expense_date, amount_paise: 10000, merchant: 'Other tab edit', version: committed.version } });
+        expect(externalResponse.ok()).toBeTruthy();
+        const external = await externalResponse.json();
+        const newer = [];
+        for (let i = 0; i < 10; i++) {
+          const response = await page.request.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: { title: `${title} newer ${i}`, category: 'meals', description: 'Newer owner draft', expense_date: committed.expense_date, amount_paise: 10000 } });
+          expect(response.ok()).toBeTruthy();
+          newer.push(await response.json());
+        }
+        if (lost.endsWith('edited')) await page.getByLabel('Claim title').fill(`${title} revised`);
+        await page.getByLabel('Choose receipt').setInputFiles({ name: 'bill.png', mimeType: 'image/png', buffer: receiptPng });
+        await page.getByRole('button', { name: 'Submit', exact: true }).click();
+        const refreshed = page.waitForResponse(r => new URL(r.url()).pathname === '/api/claims' && r.request().method() === 'GET');
+        await page.getByRole('dialog').getByRole('button', { name: 'Submit claim' }).click();
+        const rows = await (await refreshed).json();
+        expect(rows).toHaveLength(10);
+        expect(rows.map(claim => claim.id).sort((a, b) => a - b)).toEqual(newer.map(claim => claim.id).sort((a, b) => a - b));
+        await expect(page.getByRole('alert')).toContainText('current version has been refreshed');
+        await expect(page.locator('.claims-table tbody tr')).toHaveCount(10);
+        await expect(page.locator('.claim-detail .eyebrow')).toHaveText(`CLAIM #${committed.id}`);
+        await expect(page.locator('.claim-facts')).toContainText('Other tab edit');
+        expect(Number((await page.locator('.claim-detail .eyebrow').textContent()).match(/#(\d+)/)[1])).toBe(committed.id);
+        const latest = await (await page.request.get(`/api/claims/${committed.id}`)).json();
+        expect(latest.status).toBe('DRAFT');
+        expect(latest.version).toBe(external.version);
+        expect(latest.merchant).toBe('Other tab edit');
+        expect(latest.title).toBe(title);
+        expect(latest.receipt).toBeNull();
+        expect(latest.history.filter(event => event.action === 'CREATED')).toHaveLength(1);
+        expect(patchCount).toBe(0);
+        expect(uploadCount).toBe(0);
+        expect(submitCount).toBe(0);
+        await page.getByRole('button', { name: 'All claims', exact: true }).click();
+        await expect(page.locator('.claim-detail .eyebrow')).toHaveText(`CLAIM #${committed.id}`);
+        for (const navigation of ['Next', 'Previous']) {
+          await page.getByRole('button', { name: navigation, exact: true }).click();
+          const first = page.locator('.claim-select').first();
+          await expect(first).toHaveAttribute('aria-current', 'true');
+          const firstTitle = await first.locator('span').textContent();
+          await expect(page.locator('.claim-detail h2')).toHaveText(firstTitle);
+        }
+        await page.getByRole('button', { name: 'Drafts', exact: true }).click();
+        const firstDraft = page.locator('.claim-select').first();
+        await expect(firstDraft).toHaveAttribute('aria-current', 'true');
+        await expect(page.locator('.claim-detail h2')).toHaveText(await firstDraft.locator('span').textContent());
+        return;
+      }
+      await page.getByLabel('Claim title').fill(`${title} revised`);
+      await page.getByRole('button', { name: 'Save as draft' }).click();
+      await expect(page.getByRole('heading', { name: `${title} revised` })).toBeVisible();
+    } else if (lost.endsWith('patch')) {
+      if (lost === 'patch') await page.getByRole('button', { name: 'Save changes' }).click();
+      else {
+        await page.getByRole('button', { name: 'Submit', exact: true }).click();
+        await page.getByRole('dialog').getByRole('button', { name: 'Submit claim' }).click();
+      }
+      await expect(page.locator('.claim-facts')).toContainText('Reconciled edit');
+      if (lost === 'rejected patch') {
+        await expect(page.locator('.claim-detail .status-chip.status-submitted')).toBeVisible();
+        expect(committed.status).toBe('DRAFT');
+        expect(uploadCount).toBe(1);
+        expect(submitCount).toBe(1);
+        expect(submittedVersion).toBe(committed.version + 1);
+      }
+    } else {
+      await page.getByRole('button', { name: 'Submit', exact: true }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Submit claim' }).click();
+      if (lost === 'upload') {
+        await expect(page.locator('.form-error')).toBeVisible();
+        expect(submitCount).toBe(0);
+        await page.getByRole('button', { name: 'Submit', exact: true }).click();
+        await page.getByRole('dialog').getByRole('button', { name: 'Submit claim' }).click();
+      }
+      await expect(page.locator('.claim-detail .status-chip.status-submitted')).toBeVisible();
+      expect(uploadCount).toBe(1);
+      expect(submitCount).toBe(1);
+    }
+    const selectedId = Number((await page.locator('.claim-detail .eyebrow').textContent()).match(/#(\d+)/)[1]);
+    expect(selectedId).toBe(committed.id);
+    const detail = await (await page.request.get(`/api/claims/${committed.id}`)).json();
+    expect(detail.history.filter(event => event.action === 'CREATED')).toHaveLength(1);
+    expect(detail.history.filter(event => event.action === 'SUBMITTED')).toHaveLength(lost === 'rejected patch' ? 2 : lost === 'submit' || lost === 'upload' ? 1 : 0);
+    if (lost === 'rejected patch') {
+      expect(detail.history.filter(event => event.action === 'EDITED')).toHaveLength(1);
+      expect(detail.receipt.filename).toBe('corrected.png');
+    }
+    const fixtureClaims = (await (await page.request.get('/api/claims?page=1')).json()).filter(claim => claim.title.startsWith(title));
+    expect(fixtureClaims.map(claim => claim.id)).toEqual([committed.id]);
+  });
+}
+
+test('form stale edit refreshes instead of overwriting another change', async ({ page }) => {
+  await page.goto('/');
+  await signIn(page, 'employee');
+  const title = `Form conflict ${randomUUID()}`;
+  const created = await (await page.request.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: { title, category: 'meals', description: 'Conflict fixture', expense_date: '2020-01-02T10:00:00Z', amount_paise: 10000 } })).json();
+  await page.reload();
+  await page.getByRole('button', { name: title }).click();
+  await page.getByRole('button', { name: 'Edit draft' }).click();
+  await page.getByLabel('Merchant').fill('Local change');
+  const external = await page.request.patch(`/api/claims/${created.id}`, { data: { title, category: 'meals', description: 'Conflict fixture', expense_date: '2020-01-02T10:00:00Z', amount_paise: 10000, merchant: 'External change', version: created.version } });
+  expect(external.ok()).toBeTruthy();
+  await page.getByRole('button', { name: 'Save changes' }).click();
+  await expect(page.getByRole('alert')).toContainText('changed since it was opened');
+  await expect(page.locator('.claim-detail')).toContainText('External change');
+  expect((await (await page.request.get(`/api/claims/${created.id}`)).json()).merchant).toBe('External change');
+});
+
+test('expired session invalidates delayed form persistence before a new form', async ({ page }) => {
+  await page.goto('/');
+  let releaseList, releaseOld, releaseNew, listStarted, oldStarted, newStarted;
+  const listGate = new Promise(resolve => { releaseList = resolve; });
+  const oldGate = new Promise(resolve => { releaseOld = resolve; });
+  const newGate = new Promise(resolve => { releaseNew = resolve; });
+  const listPending = new Promise(resolve => { listStarted = resolve; });
+  const oldPending = new Promise(resolve => { oldStarted = resolve; });
+  const newPending = new Promise(resolve => { newStarted = resolve; });
+  let holdList = true, oldId, oldFollowups = 0;
+  await page.route('**/api/claims**', async route => {
+    const req = route.request();
+    const url = new URL(req.url());
+    if (req.method() === 'GET' && url.pathname === '/api/claims' && holdList) {
+      holdList = false; listStarted(); await listGate; return route.continue().catch(() => {});
+    }
+    if (req.method() === 'POST' && url.pathname === '/api/claims') {
+      const title = req.postDataJSON().title;
+      if (title.startsWith('Old session')) {
+        const response = await route.fetch();
+        expect(response.ok()).toBeTruthy();
+        oldId = (await response.json()).id;
+        oldStarted(); await oldGate; return route.fulfill({ response }).catch(() => {});
+      }
+      if (title.startsWith('New session')) {
+        const response = await route.fetch();
+        expect(response.ok()).toBeTruthy();
+        newStarted(); await newGate; return route.fulfill({ response }).catch(() => {});
+      }
+    }
+    if (oldId && req.method() === 'POST' && (url.pathname === `/api/claims/${oldId}/receipt` || url.pathname === `/api/claims/${oldId}/submit`)) oldFollowups++;
+    return route.continue();
+  });
+  try {
+    await signIn(page, 'employee');
+    await listPending;
+    await page.getByRole('button', { name: 'New claim' }).click();
+    await page.getByLabel('Claim title').fill(`Old session ${randomUUID()}`);
+    await page.getByLabel('Category').selectOption('meals');
+    await page.getByLabel('Choose receipt').setInputFiles({ name: 'old.png', mimeType: 'image/png', buffer: receiptPng });
+    await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+    await page.getByLabel('Requested amount (₹)').fill('10');
+    await page.getByLabel('Business purpose / expense details').fill('Old session');
+    await page.getByRole('button', { name: 'Submit', exact: true }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Submit claim' }).click();
+    await oldPending;
+    expect((await page.request.post('/api/auth/logout')).status()).toBe(204);
+    releaseList();
+    await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+    await expect(page.getByRole('alert')).toContainText('session has expired');
+    await signIn(page, 'employee');
+    await page.getByRole('button', { name: 'New claim' }).click();
+    const newTitle = `New session ${randomUUID()}`;
+    await page.getByLabel('Claim title').fill(newTitle);
+    await page.getByLabel('Category').selectOption('others');
+    await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+    await page.getByLabel('Requested amount (₹)').fill('20');
+    await page.getByLabel('Business purpose / expense details').fill('New form must survive');
+    await page.getByRole('button', { name: 'Save as draft' }).click();
+    await newPending;
+    releaseOld();
+    await page.waitForTimeout(500);
+    expect(oldFollowups).toBe(0);
+    await expect(page.getByLabel('Claim title')).toHaveValue(newTitle);
+    await expect(page.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+    releaseNew();
+    await expect(page.getByRole('heading', { name: newTitle })).toBeVisible();
+    expect(oldFollowups).toBe(0);
+    const newId = Number((await page.locator('.claim-detail .eyebrow').textContent()).match(/#(\d+)/)[1]);
+    expect(newId).not.toBe(oldId);
+    const newer = await (await page.request.get(`/api/claims/${newId}`)).json();
+    expect(newer.receipt).toBeNull();
+    expect(newer.history.map(event => event.action)).toEqual(['CREATED']);
+    const old = await (await page.request.get(`/api/claims/${oldId}`)).json();
+    expect(old.status).toBe('DRAFT');
+    expect(old.receipt).toBeNull();
+  } finally { releaseList(); releaseOld(); releaseNew(); }
 });

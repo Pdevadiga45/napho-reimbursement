@@ -20,7 +20,7 @@ npm run dev -- --host 127.0.0.1
 
 Open http://127.0.0.1:5173. API documentation is available at http://127.0.0.1:8000/docs.
 
-Add an optional merchant when creating or editing a claim. A receipt is required before submission or resubmission, but not to save a draft. Owners can attach, replace or remove it while the claim is editable. PNG, JPG, JPEG and PDF files are supported up to 5 MB (5,000,000 bytes), with images limited to 20 megapixels and unencrypted PDFs to 10 pages. Submitted claims show the receipt to authorized reviewers.
+Add an optional merchant and choose a receipt when creating or editing a claim. A receipt is required before submission or resubmission, but not to save a draft. Owners can attach, replace or remove it while the claim is editable. PNG, JPG, JPEG and PDF files are supported up to 5 MB (5,000,000 bytes), with images limited to 20 megapixels and unencrypted PDFs to 10 pages. Submitted claims show the receipt to authorized reviewers. If an upload fails after saving, the form retains the saved draft for retry.
 
 | Account | Username | Password |
 | --- | --- | --- |
@@ -74,7 +74,7 @@ API tests cover lifecycle transitions, ownership, amounts, history, duplicate re
 
 ## Known limitations
 
-- Claim lists are not paginated; large histories may increase response times and browser rendering cost.
+- Claim lists show ten records per page, with status filters applied on the server.
 - SQLite permits one writer at a time. Concurrent writes are handled safely, but contention can return a retryable conflict. High-concurrency performance has not been load-tested.
 
 OpenAI Codex was used to assist with implementation, tests and code review.

@@ -600,6 +600,56 @@ def test_workspace_queue_order_privacy_and_payload_ownership(application, client
     assert approver.get(f"/api/claims/{private['id']}").status_code == 404
 
 
+def test_paginated_workspaces_filter_order_and_count_authorized_claims(client, approver, monkeypatch):
+    for browser, path in ((client, "/api/claims"), (approver, "/api/approvals")):
+        response = browser.get(path)
+        assert response.status_code == 200
+        assert response.json() == []
+        assert (response.headers["X-Total-Count"], response.headers["X-Page-Size"], response.headers["X-Page"]) == ("0", "10", "1")
+    monkeypatch.setattr("app.utc_now", lambda: "2025-01-01T00:00:00+00:00")
+    older = create_claim(client).json()["id"]
+    monkeypatch.setattr("app.utc_now", lambda: "2025-01-02T00:00:00+00:00")
+    submitted_ids = []
+    for _ in range(12):
+        created = create_claim(client).json()
+        submitted_ids.append(created["id"])
+        version = attach_receipt(client, created["id"], created["version"])
+        assert submit_claim(client, created["id"], version).status_code == 200
+    corrected = corrected_claim(client, approver)
+    private = create_claim(client).json()["id"]
+    own = create_claim(approver).json()
+    assert submit_claim(approver, own["id"], attach_receipt(approver, own["id"], 1)).status_code == 200
+
+    def check(browser, path, params, expected, total, page):
+        response = browser.get(path, params=params)
+        assert response.status_code == 200
+        assert [row["id"] for row in response.json()] == expected
+        assert len(response.json()) <= 10
+        assert (response.headers["X-Total-Count"], response.headers["X-Page-Size"], response.headers["X-Page"]) == (str(total), "10", str(page))
+
+    employee_ids = [private, corrected, *reversed(submitted_ids), older]
+    approval_ids = [corrected, *reversed(submitted_ids)]
+    for browser, path, ids in [(client, "/api/claims", employee_ids), (approver, "/api/approvals", approval_ids)]:
+        check(browser, path, {}, ids[:10], len(ids), 1)
+        check(browser, path, {"page": 2}, ids[10:], len(ids), 2)
+        check(browser, path, {"page": 99}, [], len(ids), 99)
+        check(browser, path, {"page": 1_000_000}, [], len(ids), 1_000_000)
+        check(browser, path, {"status": "SUBMITTED", "page": 2}, list(reversed(submitted_ids))[10:], 12, 2)
+        check(browser, path, {"status": "DRAFT"}, [private, corrected, older] if browser is client else [corrected], 3 if browser is client else 1, 1)
+        check(browser, path, {"status": "PAID"}, [], 0, 1)
+    assert client.get("/api/approvals").status_code == 403
+
+
+@pytest.mark.parametrize("path,fixture", [("/api/claims", "client"), ("/api/approvals", "approver")])
+def test_paginated_workspaces_reject_invalid_queries(request, path, fixture):
+    browser = request.getfixturevalue(fixture)
+    for params in ({"page": 0}, {"page": -1}, {"page": "abc"}, {"page": "1.5"}, {"page": 1_000_001},
+                   {"page": "999999999999999999999999999999999999"}):
+        assert browser.get(path, params=params).status_code == 422
+    for status in ("UNKNOWN", ""):
+        assert browser.get(path, params={"status": status}).status_code == 422
+
+
 @pytest.mark.parametrize("claimant_fixture", ["client", "approver"])
 def test_workspace_claimant_lifecycle(request, claimant_fixture, application, monkeypatch):
     import app

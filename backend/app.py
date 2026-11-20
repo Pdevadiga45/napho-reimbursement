@@ -25,6 +25,8 @@ from policy import allowed_actions, can_view, permissions_for
 
 
 MAX_AMOUNT_PAISE = 10_000_000_000
+MAX_PAGE = 1_000_000
+ClaimStatus = Literal["DRAFT", "SUBMITTED", "APPROVED", "REJECTED", "PAID"]
 CATEGORIES = {"travel and stay", "meals", "work & tech", "others"}
 MOCK_SESSION_SECRET = "napho-mock-development-only-session-secret"
 MOCK_ACCOUNTS = {
@@ -257,21 +259,25 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
 
     @application.get("/api/claims")
     def list_claims(
-        request: Request, user: dict[str, Any] = Depends(current_user)
+        request: Request, response: Response, page: int = Query(default=1, ge=1, le=MAX_PAGE),
+        status: ClaimStatus | None = None, user: dict[str, Any] = Depends(current_user)
     ) -> list[dict[str, Any]]:
         connection = request.app.state.database.connect()
         try:
-            rows = store.list_claims(connection, user["id"])
+            rows, total = store.list_claims(connection, user["id"], page, status)
+            response.headers.update({"X-Total-Count": str(total), "X-Page-Size": str(store.PAGE_SIZE), "X-Page": str(page)})
             return [claim_response(row, user) for row in rows]
         finally:
             connection.close()
 
     @application.get("/api/approvals")
-    def list_approvals(request: Request, user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+    def list_approvals(request: Request, response: Response, page: int = Query(default=1, ge=1, le=MAX_PAGE),
+                       status: ClaimStatus | None = None, user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
         require_permission(user, "review_claims")
         connection = request.app.state.database.connect()
         try:
-            rows = store.list_approvals(connection, user["id"])
+            rows, total = store.list_approvals(connection, user["id"], page, status)
+            response.headers.update({"X-Total-Count": str(total), "X-Page-Size": str(store.PAGE_SIZE), "X-Page": str(page)})
             return [claim_response(row, user) for row in rows]
         finally:
             connection.close()

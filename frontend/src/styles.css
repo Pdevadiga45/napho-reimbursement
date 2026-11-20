@@ -260,11 +260,21 @@ h1, h2, h3, p { margin-top: 0; }
   .amount-summary > div:last-child:not(:first-child) { border-top: 1px solid #e8ebed; }
   .timeline-heading { flex-direction: column; gap: 3px; }
 }
-.receipt-panel { border-top: 1px solid #e3e6e8; padding: 20px 0; min-width: 0; }
-.receipt-panel h3 { margin: 0 0 12px; }
-.receipt-panel p { overflow-wrap: anywhere; }
+.receipt-panel { border-top: 1px solid #e9ecee; padding: 15px 0; min-width: 0; color: #58636c; font-size: 11px; line-height: 1.5; }
+.receipt-panel h3 { margin: 0 0 12px; color: #333b42; font-size: 12px; }
+.receipt-panel p { margin: 0 0 8px; overflow-wrap: anywhere; }
+.receipt-panel a { color: #4e5962; overflow-wrap: anywhere; text-underline-offset: 2px; }
 .receipt-current img { display: block; max-width: 100%; max-height: 180px; object-fit: contain; margin: 10px 0; }
 .receipt-upload { margin-top: 16px; }
-.receipt-upload label { display: block; font-weight: 600; }
+.receipt-upload label { display: block; color: #4e5962; font-size: 10px; font-weight: 680; }
 .receipt-upload input { display: block; max-width: 100%; margin-top: 8px; }
 .receipt-panel button { min-height: 44px; }
+.pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 16px; border-top: 1px solid #e5e7eb; color: #555; font-size: 13px; }
+.pagination span { flex: 1 1 150px; }
+.receipt-picker { min-width: 0; color: #4e5962; font-size: 10px; line-height: 1.5; }
+.receipt-picker label { display: block; color: #4e5962; font-size: 10px; font-weight: 680; }
+.receipt-picker .label-help { margin: 6px 0 0; overflow-wrap: anywhere; }
+.receipt-picker input[type="file"] { display: block; width: 100%; max-width: 100%; margin-top: 6px; font: inherit; }
+.receipt-picker input[type="file"]::file-selector-button { font: inherit; padding: 8px 12px; margin-right: 10px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; color: #333; cursor: pointer; }
+.receipt-current { overflow-wrap: anywhere; }
+.receipt-current img { max-width: 100%; max-height: 240px; object-fit: contain; }

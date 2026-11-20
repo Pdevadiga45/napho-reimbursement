@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { formatRupees, parseRupees } from './money.js';
 import ConfirmDialog from './ConfirmDialog.jsx';
-import ReceiptPanel from './ReceiptPanel.jsx';
+import ReceiptPanel, { ReceiptPicker } from './ReceiptPanel.jsx';
 
 const FILTERS = [
   { id: 'ALL', label: 'All claims' },
@@ -81,18 +81,19 @@ function apiErrorMessage(payload) {
 }
 
 async function api(path, userId, options = {}) {
-  const headers = new Headers(options.headers || {});
-  if (options.body !== undefined && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-  const response = await fetch(path, { ...options, headers, credentials: 'same-origin' });
+  const { isCurrent, collection, ...requestOptions } = options;
+  const headers = new Headers(requestOptions.headers || {});
+  if (requestOptions.body !== undefined && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  const response = await fetch(path, { ...requestOptions, headers, credentials: 'same-origin' });
   if (response.status === 204) return null;
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    if (response.status === 401 && (path.startsWith('/api/claims') || path.startsWith('/api/approvals'))) window.dispatchEvent(new Event('napho-session-expired'));
+    if (response.status === 401 && (!isCurrent || isCurrent()) && (path.startsWith('/api/claims') || path.startsWith('/api/approvals'))) window.dispatchEvent(new Event('napho-session-expired'));
     const error = new Error(apiErrorMessage(payload));
     error.status = response.status;
     throw error;
   }
-  return payload;
+  return collection ? { items: payload, total: Number(response.headers.get('X-Total-Count')) } : payload;
 }
 
 function Login({ onLogin, busy, message }) {
@@ -148,14 +149,29 @@ function actionLabel(action) {
   return ACTION_LABELS[action] || action;
 }
 
-function ClaimForm({ values, onChange, onSubmit, onCancel, submitLabel, error, busy, saving }) {
+function instantKey(value) {
+  const fraction = /\.(\d+)/.exec(value)?.[1] || '';
+  return `${new Date(value).toISOString().slice(0, 19)}.${fraction.padEnd(6, '0').slice(0, 6)}`;
+}
+
+function matchesPayload(claim, payload) {
+  return claim.title === payload.title.trim() && claim.description === payload.description.trim()
+    && claim.merchant === payload.merchant.trim() && claim.category === payload.category
+    && claim.amount_paise === payload.amount_paise && instantKey(claim.expense_date) === instantKey(payload.expense_date);
+}
+
+function sameClaimContents(a, b) {
+  return a.id === b.id && a.owner_id === b.owner_id && matchesPayload(a, b)
+    && (a.receipt?.id ?? null) === (b.receipt?.id ?? null);
+}
+
+function ClaimForm({ values, onChange, onSubmit, onCancel, submitLabel, error, busy, saving, onFile, inputRef }) {
   const update = (field) => (event) => onChange({ ...values, [field]: event.target.value });
   return (
     <form className="claim-form" onSubmit={onSubmit}>
       <div className="form-heading">
-        <h3>{submitLabel === 'Create draft' ? 'New expense claim' : 'Claim details'}</h3>
+        <h3>{submitLabel === 'Save as draft' ? 'New expense claim' : 'Claim details'}</h3>
         <p>Enter one INR expense. You can review a draft before submitting.</p>
-        {submitLabel === 'Create draft' && <p>Attach a receipt after saving the draft.</p>}
       </div>
       <label>
         Claim title
@@ -169,6 +185,7 @@ function ClaimForm({ values, onChange, onSubmit, onCancel, submitLabel, error, b
         </select>
         {values.originalCategory && <span className="label-help">Original category: {values.originalCategory}. Choose a current category.</span>}
       </label>
+      <ReceiptPicker onFile={onFile} busy={busy} inputRef={inputRef} />
       <label>
         Expense date and time
         <input type="datetime-local" step="0.001" name="expense_date" value={values.expense_date} onChange={update('expense_date')} required />
@@ -197,6 +214,7 @@ function ClaimForm({ values, onChange, onSubmit, onCancel, submitLabel, error, b
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="form-actions">
         <button className="button button-primary" type="submit" disabled={busy}>{saving ? 'Saving…' : submitLabel}</button>
+        <button className="button button-secondary" type="submit" name="intent" value="submit" disabled={busy}>Submit</button>
         <button className="button button-quiet" type="button" onClick={onCancel} disabled={busy}>Cancel</button>
       </div>
     </form>
@@ -262,6 +280,11 @@ export default function App() {
   const [confirmation, setConfirmation] = useState(null);
   const confirmationRef = useRef(null);
   const [filter, setFilter] = useState('ALL');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [formFile, setFormFile] = useState(null);
+  const formSaved = useRef(null);
+  const receiptInput = useRef(null);
   const [formMode, setFormMode] = useState(null);
   const [formValues, setFormValues] = useState(null);
   const [formError, setFormError] = useState('');
@@ -272,12 +295,19 @@ export default function App() {
   const listRequestId = useRef(0);
   const detailRequestId = useRef(0);
   const creationKey = useRef(null);
+  const formGeneration = useRef(0);
+  const activePersistence = useRef(null);
+
+  function invalidateForm() {
+    formGeneration.current += 1;
+    activePersistence.current = null;
+  }
 
   const userId = user?.id ?? null;
   const canReview = user?.permissions?.includes('review_claims');
-  const scopeKey = `${userId}:${workspace}`;
+  const scopeKey = `${userId}:${workspace}:${page}:${filter}`;
   const visibleClaims = claimsUserId === scopeKey ? claims : [];
-  const currentDetail = detailUserId === scopeKey && detail?.id === selectedId ? detail : null;
+  const currentDetail = claimsUserId === scopeKey && detailUserId === scopeKey && detail?.id === selectedId ? detail : null;
   const actions = currentDetail?.allowed_actions || [];
 
   useEffect(() => {
@@ -307,12 +337,16 @@ export default function App() {
     setListError('');
     setClaims([]);
     setClaimsUserId(null);
-    api(workspace === 'claims' ? '/api/claims' : '/api/approvals', userId, { signal: controller.signal })
+    const query = new URLSearchParams({ page: String(page) });
+    if (filter !== 'ALL') query.set('status', filter);
+    api(`${workspace === 'claims' ? '/api/claims' : '/api/approvals'}?${query}`, userId, { signal: controller.signal, collection: true })
       .then((result) => {
         if (requestId !== listRequestId.current) return;
-        setClaims(result);
+        setTotal(result.total);
+        if (page > 1 && (page - 1) * 10 >= result.total) { setPage(Math.max(1, Math.ceil(result.total / 10))); return; }
+        setClaims(result.items);
         setClaimsUserId(scopeKey);
-        setSelectedId((current) => result.some((claim) => claim.id === current) ? current : result[0]?.id ?? null);
+        setSelectedId((current) => current ?? result.items[0]?.id ?? null);
       })
       .catch((error) => {
         if (error.name !== 'AbortError' && requestId === listRequestId.current) setListError(error.message);
@@ -324,7 +358,7 @@ export default function App() {
       controller.abort();
       listRequestId.current += 1;
     };
-  }, [userId, workspace, listRevision]);
+  }, [userId, workspace, page, filter, listRevision]);
 
   useEffect(() => {
     if (userId === null || selectedId === null) {
@@ -357,12 +391,9 @@ export default function App() {
       controller.abort();
       detailRequestId.current += 1;
     };
-  }, [userId, workspace, selectedId, detailRevision]);
+  }, [userId, workspace, page, filter, selectedId, detailRevision]);
 
-  const filteredClaims = useMemo(() => {
-    if (filter === 'ALL') return visibleClaims;
-    return visibleClaims.filter((claim) => claim.status === filter);
-  }, [visibleClaims, filter]);
+  const filteredClaims = visibleClaims;
 
   function refreshData() {
     setListRevision((revision) => revision + 1);
@@ -402,6 +433,9 @@ export default function App() {
   }
 
   function startNewClaim() {
+    invalidateForm();
+    creationKey.current = null;
+    setPage(1); setFilter('ALL'); setFormFile(null); formSaved.current = null;
     setNotice('');
     setConflictNotice('');
     setDetailError('');
@@ -412,6 +446,9 @@ export default function App() {
 
   function startEditingClaim() {
     if (!currentDetail) return;
+    invalidateForm();
+    creationKey.current = null;
+    setFormFile(null); formSaved.current = { claim: currentDetail, payload: null, uploadedFile: null };
     setNotice('');
     setDetailError('');
     setFormError('');
@@ -432,6 +469,9 @@ export default function App() {
   }
 
   function cancelForm() {
+    invalidateForm();
+    creationKey.current = null;
+    setFormFile(null); formSaved.current = null;
     setFormMode(null);
     setFormValues(null);
     setFormError('');
@@ -463,30 +503,164 @@ export default function App() {
       return;
     }
 
-    const creating = formMode === 'create';
-    let headers;
-    if (creating) {
-      const signature = JSON.stringify(payload);
-      if (!creationKey.current || creationKey.current.signature !== signature) {
-        creationKey.current = { signature, key: crypto.randomUUID() };
-      }
-      headers = { 'Idempotency-Key': creationKey.current.key };
+    const intent = event.nativeEvent.submitter?.value === 'submit' ? 'submit' : 'draft';
+    if (intent === 'submit' && !formFile && !formSaved.current?.claim?.receipt) {
+      setFormError('Choose a receipt before submitting.');
+      receiptInput.current?.focus();
+      return;
     }
-    const result = await runMutation(
-      creating ? 'Creating draft' : 'Saving changes',
-      () => creating
-        ? api('/api/claims', userId, { method: 'POST', headers, body: JSON.stringify(payload) })
-        : api(`/api/claims/${currentDetail.id}`, userId, { method: 'PATCH', body: JSON.stringify({ ...payload, version: currentDetail.version }) }),
-      creating ? 'Draft saved.' : 'Claim changes saved.',
-      (saved) => {
-        if (creating) creationKey.current = null;
-        setFormMode(null);
-        setFormValues(null);
-        setFormError('');
-        setSelectedId(saved.id);
-      },
-    );
-    if (result) setFormMode(null);
+    if (intent === 'submit') {
+      const snapshot = { type: 'formSubmit', payload, file: formFile, userId, workspace, generation: formGeneration.current, title: payload.title, trigger: event.nativeEvent.submitter };
+      confirmationRef.current = snapshot;
+      setConfirmation(snapshot);
+      return;
+    }
+    await persistForm({ payload, file: formFile, userId, workspace, generation: formGeneration.current }, false);
+  }
+
+  async function persistForm(snapshot, submit) {
+    if (authBusy || pendingMutation || activePersistence.current || snapshot.userId !== userId || snapshot.workspace !== workspace || snapshot.generation !== formGeneration.current) return;
+    const token = {};
+    activePersistence.current = token;
+    const current = () => formGeneration.current === snapshot.generation && activePersistence.current === token;
+    const stopped = Symbol('form operation invalidated');
+    const ensureCurrent = () => { if (!current()) throw stopped; };
+    async function request(path, options = {}) {
+      ensureCurrent();
+      try {
+        const result = await api(path, snapshot.userId, { ...options, isCurrent: current });
+        ensureCurrent();
+        return result;
+      } catch (error) {
+        ensureCurrent();
+        throw error;
+      }
+    }
+    const { payload, file } = snapshot;
+    setPendingMutation('Saving claim');
+    setFormError('');
+    setConflictNotice('');
+
+    // Resolve a transport failure before attempting any further mutation.
+    async function reconcile() {
+      ensureCurrent();
+      const pending = formSaved.current?.pending;
+      if (!pending) return false;
+      const before = pending.before;
+      const latest = await request(`/api/claims/${before.id}`);
+      if (latest.version === before.version && latest.status === before.status && sameClaimContents(latest, before)) {
+        formSaved.current.pending = null;
+        return false;
+      }
+      let matches = latest.id === before.id && latest.owner_id === before.owner_id && latest.version === before.version + 1;
+      if (pending.type === 'patch') {
+        const expectedStatus = before.status === 'REJECTED' ? 'DRAFT' : before.status;
+        matches &&= latest.status === expectedStatus && (latest.receipt?.id ?? null) === (before.receipt?.id ?? null) && matchesPayload(latest, pending.payload);
+      } else if (pending.type === 'upload') {
+        const bytes = await pending.file.arrayBuffer();
+        ensureCurrent();
+        const hash = await crypto.subtle.digest('SHA-256', bytes);
+        ensureCurrent();
+        const digest = [...new Uint8Array(hash)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+        matches &&= latest.status === before.status && matchesPayload(latest, before) && latest.receipt?.filename === pending.file.name && latest.receipt?.sha256 === digest;
+      } else {
+        matches &&= latest.status === 'SUBMITTED' && sameClaimContents(latest, before);
+      }
+      if (!matches) {
+        const conflict = new Error('This claim changed since it was opened.');
+        conflict.status = 409;
+        throw conflict;
+      }
+      formSaved.current = { ...formSaved.current, claim: latest, pending: null,
+        ...(pending.type === 'patch' ? { payload: JSON.stringify(pending.payload) } : {}),
+        ...(pending.type === 'upload' ? { uploadedFile: pending.file } : {}) };
+      return pending.type === 'submit';
+    }
+
+    async function uncertainOperation(type, before, operation, extra = {}) {
+      ensureCurrent();
+      try { const result = await operation(); ensureCurrent(); return result; }
+      catch (error) {
+        ensureCurrent();
+        if (error.status !== undefined) throw error;
+        formSaved.current.pending = { type, before, ...extra };
+        try {
+          const submitted = await reconcile();
+          ensureCurrent();
+          if (type === 'submit' && submitted) return formSaved.current.claim;
+          if (type === 'patch' && !formSaved.current.pending && formSaved.current.claim.version === before.version + 1) return formSaved.current.claim;
+        } catch (reconcileError) {
+          ensureCurrent();
+          if (reconcileError.status === 409) throw reconcileError;
+        }
+        throw error;
+      }
+    }
+
+    try {
+      const alreadySubmitted = await reconcile();
+      ensureCurrent();
+      let saved = formSaved.current?.claim;
+      if (!alreadySubmitted) {
+        if (!saved) {
+          if (!creationKey.current) creationKey.current = { payload, key: crypto.randomUUID() };
+          const attempt = creationKey.current;
+          try {
+            saved = await request('/api/claims', { method: 'POST', headers: { 'Idempotency-Key': attempt.key }, body: JSON.stringify(attempt.payload) });
+          } catch (error) {
+            ensureCurrent();
+            if (error.status !== undefined && error.status !== 409 && error.status < 500) creationKey.current = null;
+            throw error;
+          }
+          // A replay returns the current record, which may have changed in another tab.
+          // Keep its identity for conflict navigation, but do not trust its version or contents.
+          formSaved.current = { claim: saved, payload: null, uploadedFile: null, pending: null };
+          if (saved.owner_id !== snapshot.userId || saved.status !== 'DRAFT' || saved.version !== 1 || saved.receipt || !matchesPayload(saved, attempt.payload)) {
+            const conflict = new Error('This claim changed since it was opened.');
+            conflict.status = 409;
+            throw conflict;
+          }
+          formSaved.current.payload = JSON.stringify(attempt.payload);
+          creationKey.current = null;
+        }
+        if (formSaved.current.payload !== JSON.stringify(payload)) {
+          const before = saved;
+          saved = await uncertainOperation('patch', before, () => request(`/api/claims/${before.id}`, { method: 'PATCH', body: JSON.stringify({ ...payload, version: before.version }) }), { payload });
+          ensureCurrent();
+          formSaved.current = { ...formSaved.current, claim: saved, payload: JSON.stringify(payload) };
+        }
+        if (file && formSaved.current.uploadedFile !== file) {
+          const before = saved;
+          saved = await uncertainOperation('upload', before, () => request(`/api/claims/${before.id}/receipt?version=${before.version}&filename=${encodeURIComponent(file.name)}`, { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file }), { file });
+          ensureCurrent();
+          formSaved.current = { ...formSaved.current, claim: saved, uploadedFile: file };
+        }
+        if (submit) {
+          const before = saved;
+          saved = await uncertainOperation('submit', before, () => request(`/api/claims/${before.id}/submit`, { method: 'POST', body: JSON.stringify({ version: before.version }) }));
+          ensureCurrent();
+          formSaved.current = { ...formSaved.current, claim: saved };
+        }
+      }
+      setSelectedId(saved.id); setPage(1); setFilter('ALL');
+      setNotice(alreadySubmitted || submit ? 'Claim submitted for review.' : 'Claim saved.');
+      setFormMode(null); setFormValues(null); setFormFile(null); formSaved.current = null;
+      refreshData();
+    } catch (error) {
+      if (!current()) return;
+      if (error.status === 409) {
+        const savedId = formSaved.current?.claim?.id;
+        if (savedId) setSelectedId(savedId);
+        setConflictNotice('This claim changed since it was opened. The current version has been refreshed; review it before trying again.');
+        setFormMode(null); setFormValues(null); setFormFile(null); formSaved.current = null; creationKey.current = null;
+        refreshData();
+      } else if (error.status !== 401) {
+        const state = formSaved.current?.claim?.status;
+        setFormError(`${state ? `Claim #${formSaved.current.claim.id} was last saved as ${STATUS_LABELS[state] || state}. ` : 'The save outcome may be unknown. '}${error.message}`);
+      }
+    } finally {
+      if (current()) { activePersistence.current = null; setPendingMutation(''); }
+    }
   }
 
   function dismissConfirmation() {
@@ -511,7 +685,9 @@ export default function App() {
     const snapshot = confirmationRef.current;
     if (!snapshot || authBusy || pendingMutation || snapshot.userId !== userId || snapshot.workspace !== workspace) return;
     dismissConfirmation();
-    if (snapshot.type === 'delete') {
+    if (snapshot.type === 'formSubmit') {
+      await persistForm(snapshot, true);
+    } else if (snapshot.type === 'delete') {
       await runMutation('Deleting draft',
         () => api(`/api/claims/${snapshot.id}?version=${snapshot.version}`, snapshot.userId, { method: 'DELETE' }),
         'Draft deleted.', () => { setSelectedId(null); setFormMode(null); });
@@ -591,6 +767,7 @@ export default function App() {
   }
 
   function clearSession() {
+    invalidateForm();
     dismissConfirmation();
     listRequestId.current += 1;
     detailRequestId.current += 1;
@@ -603,6 +780,7 @@ export default function App() {
     setDetail(null);
     setDetailUserId(null);
     setFilter('ALL');
+    setPage(1); setTotal(0); setFormFile(null); formSaved.current = null; creationKey.current = null;
     setFormMode(null);
     setFormValues(null);
     setFormError('');
@@ -619,6 +797,7 @@ export default function App() {
 
   function changeWorkspace(next) {
     if (authBusy || pendingMutation || next === workspace) return;
+    invalidateForm();
     dismissConfirmation();
     listRequestId.current += 1;
     detailRequestId.current += 1;
@@ -628,6 +807,7 @@ export default function App() {
     setDetail(null);
     setDetailUserId(null);
     setFilter('ALL');
+    setPage(1); setTotal(0); setFormFile(null); formSaved.current = null; creationKey.current = null;
     setFormMode(null);
     setFormValues(null);
     setFormError('');
@@ -646,6 +826,7 @@ export default function App() {
     setAuthMessage('');
     try {
       const signedIn = await api('/api/auth/login', null, { method: 'POST', body: JSON.stringify({ username, password }) });
+      invalidateForm();
       setUser(signedIn);
     } catch (error) {
       setAuthMessage(error.status === 401 ? 'Invalid username or password.' : 'Unable to sign in. Please try again.');
@@ -705,7 +886,8 @@ export default function App() {
                 className={`filter-button ${filter === item.id ? 'filter-active' : ''}`}
                 key={item.id}
                 type="button"
-                onClick={() => setFilter(item.id)}
+                disabled={authBusy || Boolean(pendingMutation)}
+                onClick={() => { invalidateForm(); if (filter !== item.id || page !== 1) setSelectedId(null); setPage(1); setFilter(item.id); setFormMode(null); }}
               >
                 {item.label}
               </button>
@@ -725,13 +907,13 @@ export default function App() {
                 <h2 id="claims-list-heading">{workspace === 'approvals' ? 'Team claims' : 'Your claims'}</h2>
                 <p>{workspace === 'approvals' ? 'Submitted and reviewed expenses' : 'Current and past expenses'}</p>
               </div>
-              <span className="count-pill" aria-label={`${filteredClaims.length} claims`}>{filteredClaims.length}</span>
+              <span className="count-pill" aria-label={`${total} claims`}>{total}</span>
             </div>
             {listLoading ? (
               <p className="list-loading" role="status">Loading claims…</p>
             ) : userId === null ? (
               <div className="empty-state"><h3>Claims are unavailable</h3><p>Check the connection and reload this page.</p></div>
-            ) : visibleClaims.length === 0 ? (
+            ) : visibleClaims.length === 0 && filter === 'ALL' ? (
               <div className="empty-state">
                 <span className="empty-mark" aria-hidden="true">—</span>
                 <h3>No claims yet</h3>
@@ -754,7 +936,9 @@ export default function App() {
                             className="claim-select"
                             type="button"
                             aria-current={claim.id === selectedId ? 'true' : undefined}
+                            disabled={authBusy || Boolean(pendingMutation)}
                             onClick={() => {
+                              invalidateForm();
                               setConflictNotice('');
                               setSelectedId(claim.id);
                               setFormMode(null);
@@ -774,6 +958,11 @@ export default function App() {
                 </table>
               </div>
             )}
+            <div className="pagination" aria-label="Claim pages">
+              <span>{total ? `${(page - 1) * 10 + 1}–${Math.min(page * 10, total)} of ${total}` : '0 of 0'} · Page {page} of {Math.max(1, Math.ceil(total / 10))}</span>
+              <button className="button button-secondary" type="button" disabled={page === 1 || listLoading || authBusy || Boolean(pendingMutation)} onClick={() => { invalidateForm(); setFormMode(null); setSelectedId(null); setPage(page - 1); }}>Previous</button>
+              <button className="button button-secondary" type="button" disabled={page * 10 >= total || listLoading || authBusy || Boolean(pendingMutation)} onClick={() => { invalidateForm(); setFormMode(null); setSelectedId(null); setPage(page + 1); }}>Next</button>
+            </div>
             {workspace === 'approvals' && <p className="list-footnote">New drafts are private; previously reviewed corrections remain accessible.</p>}
           </section>
 
@@ -784,10 +973,12 @@ export default function App() {
                 onChange={setFormValues}
                 onSubmit={saveClaim}
                 onCancel={cancelForm}
-                submitLabel={formMode === 'create' ? 'Create draft' : 'Save changes'}
+                submitLabel={formMode === 'create' ? 'Save as draft' : 'Save changes'}
                 error={formError}
                 busy={authBusy || Boolean(pendingMutation)}
                 saving={Boolean(pendingMutation)}
+                onFile={(file) => { setFormFile(file); if (file) setFormError((message) => message === 'Choose a receipt before submitting.' ? '' : message); }}
+                inputRef={receiptInput}
               />
             ) : detailLoading ? (
               <div className="detail-placeholder" role="status"><span className="loading-dot" /> Loading claim…</div>
