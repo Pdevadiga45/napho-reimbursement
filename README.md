@@ -77,4 +77,4 @@ API tests cover lifecycle transitions, ownership, amounts, history, duplicate re
 - Claim lists are not paginated; large histories may increase response times and browser rendering cost.
 - SQLite permits one writer at a time. Concurrent writes are handled safely, but contention can return a retryable conflict. High-concurrency performance has not been load-tested.
 
-OpenAI Codex was used to assist with implementation, tests and code review.
+OpenAI Codex was used to assist with implementation and unit tests.
