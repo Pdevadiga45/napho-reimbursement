@@ -45,7 +45,7 @@ Startup creates the schema and mock accounts. Data persists in `backend/napho.sq
 - Transactions and version checks reject stale competing actions with HTTP 409. Per-owner idempotency keys prevent duplicate creation; workflow changes and their history are recorded together.
 - Only never-submitted drafts can be deleted. Corrections and resubmissions retain previous decisions and remain accessible to authorized reviewers.
 - Receipt bytes are stored privately in SQLite. Claim history records receipt snapshots and retains links to earlier files after replacement or removal.
-- New claims use Travel and Stay, Meals, Work & Tech, or Others. Expense date and time is entered in the browser's local timezone and stored as a UTC instant. Historic date-only values remain date-only; editing them requires a time and a current category when the historic category is no longer supported.
+- New claims use Travel and Stay, Meals, Work & Tech, or Others. Expense dates are calendar dates. Editing a historic claim requires a current category when its historic category is no longer supported.
 
 ## Assumptions
 

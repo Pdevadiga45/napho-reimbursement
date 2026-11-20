@@ -26,38 +26,7 @@ const STATUS_LABELS = {
 };
 const CATEGORIES = { 'travel and stay': 'Travel and Stay', meals: 'Meals', 'work & tech': 'Work & Tech', others: 'Others' };
 const categoryLabel = (value) => Object.hasOwn(CATEGORIES, value) ? CATEGORIES[value] : value;
-const isDateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value || '');
-function parseLocalInput(value) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$/.exec(value || '');
-  if (!match) return null;
-  const [, yearText, monthText, dayText, hourText, minuteText, secondText = '0', fraction = ''] = match;
-  const year = Number(yearText);
-  const month = Number(monthText);
-  const day = Number(dayText);
-  const hour = Number(hourText);
-  const minute = Number(minuteText);
-  const second = Number(secondText);
-  const millisecond = Number((fraction + '000').slice(0, 3));
-  const date = new Date(0);
-  date.setFullYear(year, month - 1, day);
-  date.setHours(hour, minute, second, millisecond);
-  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day || date.getHours() !== hour || date.getMinutes() !== minute || date.getSeconds() !== second || date.getMilliseconds() !== millisecond) return null;
-  return date;
-}
-function formatLocalDateTime(date) {
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-function localWallKey(value) {
-  const date = parseLocalInput(value);
-  return date ? formatLocalDateTime(date) : '';
-}
-function localInput(value) {
-  if (!value || isDateOnly(value)) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return formatLocalDateTime(date);
-}
+const datePortion = (value) => (value || '').slice(0, 10);
 
 const ACTION_LABELS = {
   CREATED: 'Draft created',
@@ -118,10 +87,6 @@ function Login({ onLogin, busy, message }) {
   );
 }
 
-function todayString() {
-  return new Date().toISOString().slice(0, 10);
-}
-
 function rupeesInput(paise) {
   const whole = Math.floor(paise / 100);
   const fraction = String(paise % 100).padStart(2, '0');
@@ -129,11 +94,7 @@ function rupeesInput(paise) {
 }
 
 function dateLabel(value) {
-  if (!value) return '—';
-  if (isDateOnly(value)) return `${value} · time not recorded`;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return `${new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium', timeStyle: 'medium' }).format(date)} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`;
+  return value ? datePortion(value) : '—';
 }
 
 function timeLabel(value) {
@@ -150,15 +111,10 @@ function actionLabel(action) {
   return ACTION_LABELS[action] || action;
 }
 
-function instantKey(value) {
-  const fraction = /\.(\d+)/.exec(value)?.[1] || '';
-  return `${new Date(value).toISOString().slice(0, 19)}.${fraction.padEnd(6, '0').slice(0, 6)}`;
-}
-
 function matchesPayload(claim, payload) {
   return claim.title === payload.title.trim() && claim.description === payload.description.trim()
     && claim.merchant === payload.merchant.trim() && claim.category === payload.category
-    && claim.amount_paise === payload.amount_paise && instantKey(claim.expense_date) === instantKey(payload.expense_date);
+    && claim.amount_paise === payload.amount_paise && datePortion(claim.expense_date) === datePortion(payload.expense_date);
 }
 
 function sameClaimContents(a, b) {
@@ -187,9 +143,8 @@ function ClaimForm({ values, onChange, onSubmit, onCancel, submitLabel, error, b
         <input maxLength="120" name="title" value={values.title} onChange={update('title')} disabled={busy} required />
       </label>
       <label>
-        Expense date and time
-        <input type="datetime-local" step="60" name="expense_date" value={values.expense_date} onChange={update('expense_date')} disabled={busy} required />
-        {values.originalDate && <span className="label-help">Original date: {values.originalDate}; time was not recorded. Enter a time.</span>}
+        Expense date
+        <input type="date" name="expense_date" value={values.expense_date} onChange={update('expense_date')} disabled={busy} required />
       </label>
       <label>
         Requested amount (₹)
@@ -460,10 +415,7 @@ export default function App() {
       description: currentDetail.description,
       category: hasCurrentCategory ? currentDetail.category : '',
       originalCategory: hasCurrentCategory ? '' : currentDetail.category,
-      expense_date: localInput(currentDetail.expense_date),
-      originalInput: localInput(currentDetail.expense_date),
-      originalInstant: isDateOnly(currentDetail.expense_date) ? '' : currentDetail.expense_date,
-      originalDate: isDateOnly(currentDetail.expense_date) ? currentDetail.expense_date : '',
+      expense_date: datePortion(currentDetail.expense_date),
       amount: rupeesInput(currentDetail.amount_paise),
     });
     setFormMode('edit');
@@ -487,16 +439,12 @@ export default function App() {
       if (formValues.title.trim().length === 0 || formValues.category.trim().length === 0 || formValues.description.trim().length === 0) {
         throw new Error('Enter a title, category, and description.');
       }
-      const instant = parseLocalInput(formValues.expense_date);
-      if (!instant || instant > new Date()) throw new Error('Choose a valid expense date and time that is not in the future.');
-      const inputWallTime = localWallKey(formValues.expense_date);
-      const originalWallTime = localWallKey(formValues.originalInput);
       payload = {
         title: formValues.title,
         merchant: formValues.merchant,
         description: formValues.description,
         category: formValues.category,
-        expense_date: formValues.originalInstant && inputWallTime && inputWallTime === originalWallTime ? formValues.originalInstant : instant.toISOString(),
+        expense_date: formValues.expense_date,
         amount_paise,
       };
     } catch (error) {
@@ -1005,7 +953,7 @@ export default function App() {
 
                 <dl className="claim-facts">
                   <div><dt>Category</dt><dd>{categoryLabel(currentDetail.category)}</dd></div>
-                  <div><dt>Expense date and time</dt><dd>{dateLabel(currentDetail.expense_date)}</dd></div>
+                  <div><dt>Expense date</dt><dd>{dateLabel(currentDetail.expense_date)}</dd></div>
                   <div><dt>Merchant</dt><dd>{currentDetail.merchant || 'Not provided'}</dd></div>
                   <div className="description-fact"><dt>Business purpose / expense details</dt><dd>{currentDetail.description}</dd></div>
                 </dl>

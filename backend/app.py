@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import sqlite3
 from urllib.parse import quote
 from contextlib import asynccontextmanager, contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Literal
 from uuid import UUID
@@ -49,7 +50,7 @@ class ClaimFields(APIModel):
     title: StrictStr = Field(max_length=120)
     description: StrictStr = Field(max_length=2000)
     category: StrictStr = Field(max_length=80)
-    expense_date: datetime
+    expense_date: date
     amount_paise: StrictInt = Field(gt=0, le=MAX_AMOUNT_PAISE)
     merchant: StrictStr = Field(default="", max_length=120)
 
@@ -75,22 +76,16 @@ class ClaimFields(APIModel):
 
     @field_validator("expense_date", mode="before")
     @classmethod
-    def expense_date_is_not_future(cls, value: Any) -> datetime:
-        if not isinstance(value, str) or len(value) < 11 or value[10] not in "Tt":
-            raise ValueError("expense_date must include date, time and timezone")
+    def expense_date_is_not_future(cls, value: Any) -> date:
+        if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value, flags=re.ASCII):
+            raise ValueError("expense_date must be YYYY-MM-DD")
         try:
-            parsed = datetime.fromisoformat(value)
+            parsed = date.fromisoformat(value)
         except ValueError as error:
-            raise ValueError("expense_date must include date, time and timezone") from error
-        if parsed.tzinfo is None or parsed.utcoffset() is None:
-            raise ValueError("expense_date must include date, time and timezone")
-        try:
-            value = parsed.astimezone(timezone.utc)
-        except OverflowError as error:
-            raise ValueError("expense_date is outside the supported range") from error
-        if value > datetime.now(timezone.utc):
+            raise ValueError("expense_date must be a valid calendar date") from error
+        if parsed > date.today():
             raise ValueError("expense_date must not be in the future")
-        return value
+        return parsed
 
 
 class ClaimCreate(ClaimFields):
@@ -144,9 +139,9 @@ def submission_errors(row: sqlite3.Row) -> list[str]:
     if row["category"] not in CATEGORIES:
         errors.append("Choose a current category")
     try:
-        ClaimFields.expense_date_is_not_future(row["expense_date"])
+        ClaimFields.expense_date_is_not_future(row["expense_date"][:10])
     except ValueError:
-        errors.append("Enter an expense date and time with timezone")
+        errors.append("Enter a valid expense date")
     return errors
 
 

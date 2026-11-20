@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 import base64
 from uuid import uuid4
 
@@ -148,7 +148,7 @@ def claim_payload(**overrides):
         "title": "Client visit taxi",
         "description": "Taxi from office to customer site",
         "category": "travel and stay",
-        "expense_date": "2025-02-03T00:00:00+00:00",
+        "expense_date": "2025-02-03",
         "amount_paise": 12500,
         **overrides,
     }
@@ -191,25 +191,26 @@ def test_submission_requires_receipt_without_mutation(client):
     assert client.get(f"/api/claims/{claim['id']}").json() == before
 
 
-def test_expense_datetime_requires_timezone_and_normalizes(client):
-    response = create_claim(client, claim_payload(expense_date="2025-02-03T12:30:00+05:30"))
+def test_expense_date_contract(client):
+    response = create_claim(client, claim_payload(expense_date="2025-02-03"))
     assert response.status_code == 201
     claim = response.json()
-    assert claim["expense_date"] == "2025-02-03T07:00:00+00:00"
+    assert claim["expense_date"] == "2025-02-03"
     assert client.get(f"/api/claims/{claim['id']}").json()["history"][0]["expense_date"] == claim["expense_date"]
-    for value in ("2025-02-03", "2025-02-03T12:30:00", 1738582200, "2999-01-01T00:00:00Z", "0001-01-01T00:00:00+14:00"):
+    for value in ("2025-02-03T12:30:00+05:30", "2025-02-03T12:30:00", 1738582200, True, "2025-02-30", "2025-2-03"):
         assert create_claim(client, claim_payload(expense_date=value)).status_code == 422
-    future = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()
+    future = (date.today() + timedelta(days=1)).isoformat()
     assert create_claim(client, claim_payload(expense_date=future)).status_code == 422
+    assert create_claim(client, claim_payload(expense_date=date.today().isoformat())).status_code == 201
     for value in (future, "2025-02-03T12:30:00", 1738582200):
         assert client.patch(f"/api/claims/{claim['id']}", json={**claim_payload(expense_date=value), "version": 1}).status_code == 422
 
 
-def test_datetime_equivalence_persists_in_store_history_and_reopen(application, client):
-    created = create_claim(client, claim_payload(expense_date="2025-02-03T12:30:15+05:30")).json()
+def test_date_persists_in_store_history_and_reopen(application, client):
+    created = create_claim(client, claim_payload(expense_date="2025-02-03")).json()
     cid = created['id']
-    canonical = '2025-02-03T07:00:15+00:00'
-    edited = client.patch(f'/api/claims/{cid}', json={**claim_payload(expense_date='2025-02-03T02:00:15-05:00'), 'version': 1}).json()
+    canonical = '2025-02-03'
+    edited = client.patch(f'/api/claims/{cid}', json={**claim_payload(expense_date='2025-02-03'), 'version': 1}).json()
     assert created['expense_date'] == edited['expense_date'] == canonical
     connection = application.state.database.connect()
     try:
@@ -221,6 +222,27 @@ def test_datetime_equivalence_persists_in_store_history_and_reopen(application, 
         detail = reopened.get(f'/api/claims/{cid}').json()
         assert detail['expense_date'] == canonical
         assert [event['expense_date'] for event in detail['history']] == [canonical, canonical]
+
+
+def test_legacy_timestamp_read_submit_and_edit_preserve_history(application, client):
+    claim = create_claim(client).json()
+    cid = claim['id']
+    old = '2025-02-03T12:30:15+00:00'
+    connection = application.state.database.connect()
+    try:
+        connection.execute('UPDATE claims SET expense_date=? WHERE id=?', (old, cid))
+        connection.execute('UPDATE claim_events SET expense_date=? WHERE claim_id=?', (old, cid))
+    finally:
+        connection.close()
+    detail = client.get(f'/api/claims/{cid}').json()
+    assert detail['expense_date'] == detail['history'][0]['expense_date'] == old
+    version = attach_receipt(client, cid, detail['version'])
+    assert client.get(f'/api/claims/{cid}').json()['submission_errors'] == []
+    edited = client.patch(f'/api/claims/{cid}', json={**claim_payload(), 'version': version}).json()
+    assert edited['expense_date'] == '2025-02-03'
+    history = client.get(f'/api/claims/{cid}').json()['history']
+    assert history[0]['expense_date'] == old
+    assert submit_claim(client, cid, edited['version']).status_code == 200
 
 
 def test_legacy_editable_values_require_correction_and_preserve_history(application, client):
@@ -235,7 +257,7 @@ def test_legacy_editable_values_require_correction_and_preserve_history(applicat
         connection.close()
     before = client.get(f'/api/claims/{cid}').json()
     assert (before['category'], before['expense_date']) == ('Travel', '2025-02-03')
-    assert len(before['submission_errors']) == 3
+    assert len(before['submission_errors']) == 2
     assert submit_claim(client, cid, before['version']).status_code == 422
     assert client.get(f'/api/claims/{cid}').json() == before
     version = attach_receipt(client, cid, before['version'])

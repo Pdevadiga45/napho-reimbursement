@@ -98,7 +98,7 @@ test('saving locks the captured claim fields until the committed response', asyn
   const title = `Busy snapshot ${randomUUID()}`;
   await page.getByLabel('Category').selectOption('meals');
   await page.getByLabel('Claim title').fill(title);
-  await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+  await page.getByLabel('Expense date').fill('2020-01-02');
   await page.getByLabel('Requested amount (₹)').fill('100');
   await page.getByLabel('Merchant').fill('Shop');
   await page.getByLabel('Business purpose / expense details').fill('Snapshot');
@@ -122,7 +122,7 @@ test('saving locks the captured claim fields until the committed response', asyn
     await page.getByRole('button', { name: 'Save as draft' }).click();
     expect(await responseReady).toBe(201);
     await expect(page.getByRole('button', { name: 'Saving…' })).toBeVisible();
-    for (const label of ['Category', 'Claim title', 'Expense date and time', 'Requested amount (₹)', 'Merchant', 'Business purpose / expense details']) {
+    for (const label of ['Category', 'Claim title', 'Expense date', 'Requested amount (₹)', 'Merchant', 'Business purpose / expense details']) {
       await expect(page.getByLabel(label)).toBeDisabled();
     }
     release();
@@ -148,7 +148,7 @@ test('stale tabs cannot create claims after the shared account changes', async (
     const title = `Stale actor ${randomUUID()}`;
     await page.getByLabel('Category').selectOption('meals');
     await page.getByLabel('Claim title').fill(title);
-    await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+    await page.getByLabel('Expense date').fill('2020-01-02');
     await page.getByLabel('Requested amount (₹)').fill('100');
     await page.getByLabel('Business purpose / expense details').fill('Stale actor');
     const other = await context.newPage();
@@ -174,7 +174,7 @@ test('pending logout prevents draft creation', async ({ page }) => {
   await page.getByRole('button', { name: 'New claim' }).click();
   await page.getByLabel('Claim title').fill('Logout race');
   await page.getByLabel('Category').selectOption('others');
-  await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+  await page.getByLabel('Expense date').fill('2020-01-02');
   await page.getByLabel('Requested amount (₹)').fill('10');
   await page.getByLabel('Business purpose / expense details').fill('Check logout guard');
 
@@ -230,7 +230,7 @@ test('sign in, restore, log out and expire a session', async ({ page }) => {
   await page.getByRole('button', { name: 'New claim' }).click();
   await page.getByLabel('Claim title').fill('Expired session');
   await page.getByLabel('Category').selectOption('others');
-  await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+  await page.getByLabel('Expense date').fill('2020-01-02');
   await page.getByLabel('Requested amount (₹)').fill('10');
   await page.getByLabel('Business purpose / expense details').fill('Session expiry check');
   await page.getByRole('button', { name: 'Save as draft' }).click();
@@ -267,7 +267,7 @@ test.describe('rupee amount parsing', () => {
 });
 
 test('employee and approver claim workflow', async ({ page }) => {
-  const expenseDate = '2020-01-02T10:00';
+  const expenseDate = '2020-01-02';
   await page.goto('/');
   await signIn(page, 'employee');
   await expect(page.getByText('Amounts are shown in Indian rupees (INR).', { exact: true })).toHaveCount(0);
@@ -285,7 +285,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByRole('button', { name: 'New claim' }).click();
   await page.getByLabel('Claim title').fill('Office supplies sample');
   await page.getByLabel('Category').selectOption('work & tech');
-  await page.getByLabel('Expense date and time').fill(expenseDate);
+  await page.getByLabel('Expense date').fill(expenseDate);
   await page.getByLabel('Requested amount (₹)').fill('900');
   await page.getByLabel('Business purpose / expense details').fill('Temporary draft to check edit and delete.');
   await page.getByRole('button', { name: 'Save as draft' }).click();
@@ -311,7 +311,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByRole('button', { name: 'New claim' }).click();
   await page.getByLabel('Claim title').fill('Airport taxi');
   await page.getByLabel('Category').selectOption('travel and stay');
-  await page.getByLabel('Expense date and time').fill(expenseDate);
+  await page.getByLabel('Expense date').fill(expenseDate);
   await page.getByLabel('Requested amount (₹)').fill('8000');
   await page.getByLabel('Business purpose / expense details').fill('Airport transfer for a client visit.');
   await page.getByRole('button', { name: 'Save as draft' }).click();
@@ -344,7 +344,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByRole('button', { name: 'New claim' }).click();
   await page.getByLabel('Claim title').fill('Hotel correction');
   await page.getByLabel('Category').selectOption('travel and stay');
-  await page.getByLabel('Expense date and time').fill(expenseDate);
+  await page.getByLabel('Expense date').fill(expenseDate);
   await page.getByLabel('Requested amount (₹)').fill('2000');
   await page.getByLabel('Business purpose / expense details').fill('Hotel stay during a work trip.');
   await page.getByRole('button', { name: 'Save as draft' }).click();
@@ -403,7 +403,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByRole('button', { name: 'New claim' }).click();
   await page.getByLabel('Claim title').fill('Stale review guard');
   await page.getByLabel('Category').selectOption('others');
-  await page.getByLabel('Expense date and time').fill(expenseDate);
+  await page.getByLabel('Expense date').fill(expenseDate);
   await page.getByLabel('Requested amount (₹)').fill('100');
   await page.getByLabel('Business purpose / expense details').fill('Verify that a stale approval is not replayed.');
   await page.getByRole('button', { name: 'Save as draft' }).click();
@@ -441,7 +441,7 @@ test('approver owns claims but cannot review their own submission', async ({ pag
   await page.getByRole('button', { name: 'New claim' }).click();
   await page.getByLabel('Claim title').fill('Approver own expense');
   await page.getByLabel('Category').selectOption('travel and stay');
-  await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+  await page.getByLabel('Expense date').fill('2020-01-02');
   await page.getByLabel('Requested amount (₹)').fill('100');
   await page.getByLabel('Business purpose / expense details').fill('Own expense');
   await page.getByRole('button', { name: 'Save as draft' }).click();
@@ -480,7 +480,7 @@ test('rapid workspace changes discard delayed real collection responses', async 
     const createClaim = async (context, title) => {
       const response = await context.post('/api/claims', {
         headers: { 'Idempotency-Key': randomUUID() },
-        data: { title, category: 'travel and stay', description: 'Workspace race fixture', expense_date: '2020-01-02T10:00:00Z', amount_paise: 10000 },
+        data: { title, category: 'travel and stay', description: 'Workspace race fixture', expense_date: '2020-01-02', amount_paise: 10000 },
       });
       expect(response.status()).toBe(201);
       return response.json();
@@ -551,7 +551,7 @@ for (const state of ['first submission', 'direct rejected resubmission', 'correc
       for (const [context, username] of [[employee, 'employee'], [manager, 'manager']]) {
         expect((await context.post('/api/auth/login', { data: { username, password: `${username}123` } })).ok()).toBeTruthy();
       }
-      const payload = { title: `Confirmation ${randomUUID()}`, category: 'travel and stay', description: 'Confirmation fixture', expense_date: '2020-01-02T10:00:00Z', amount_paise: 10000 };
+      const payload = { title: `Confirmation ${randomUUID()}`, category: 'travel and stay', description: 'Confirmation fixture', expense_date: '2020-01-02', amount_paise: 10000 };
       const created = await employee.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: payload });
       expect(created.status()).toBe(201);
       const claim = await created.json();
@@ -620,7 +620,7 @@ test('delete confirmation cancels and deletes on mobile', async ({ page }) => {
   const employee = await request.newContext({ baseURL: new URL(page.url()).origin });
   try {
     expect((await employee.post('/api/auth/login', { data: { username: 'employee', password: 'employee123' } })).ok()).toBeTruthy();
-    const payload = { title: `Delete ${randomUUID()}`, category: 'travel and stay', description: 'Delete fixture', expense_date: '2020-01-02T10:00:00Z', amount_paise: 10000 };
+    const payload = { title: `Delete ${randomUUID()}`, category: 'travel and stay', description: 'Delete fixture', expense_date: '2020-01-02', amount_paise: 10000 };
     const claim = await (await employee.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: payload })).json();
     const before = await (await employee.get(`/api/claims/${claim.id}`)).json();
     const unexpectedDialogs = [];
@@ -666,7 +666,7 @@ test('confirmation submits the captured version after an external edit', async (
   const employee = await request.newContext({ baseURL: new URL(page.url()).origin });
   try {
     expect((await employee.post('/api/auth/login', { data: { username: 'employee', password: 'employee123' } })).ok()).toBeTruthy();
-    const payload = { title: `Stale ${randomUUID()}`, category: 'travel and stay', description: 'Snapshot fixture', expense_date: '2020-01-02T10:00:00Z', amount_paise: 10000 };
+    const payload = { title: `Stale ${randomUUID()}`, category: 'travel and stay', description: 'Snapshot fixture', expense_date: '2020-01-02', amount_paise: 10000 };
     const claim = await (await employee.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: payload })).json();
     const ready = await attachApiReceipt(employee, claim);
     await signIn(page, 'employee');
@@ -697,7 +697,7 @@ test('receipt attaches to a merchant draft', async ({ page }) => {
   await page.getByRole('button', { name: 'New claim' }).click();
   await page.getByLabel('Claim title').fill(title);
   await page.getByLabel('Category').selectOption('travel and stay');
-  await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+  await page.getByLabel('Expense date').fill('2020-01-02');
   await page.getByLabel('Requested amount (₹)').fill('100');
   await page.getByLabel('Business purpose / expense details').fill('Client visit');
   await page.getByLabel('Merchant').fill('Example shop');
@@ -758,7 +758,7 @@ test('receipt validation and removal preserve history on narrow screens', async 
   try {
     expect((await employee.post('/api/auth/login', { data: { username: 'employee', password: 'employee123' } })).ok()).toBeTruthy();
     const title = 'Removal ' + randomUUID();
-    const claim = await (await employee.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: { title, category: 'travel and stay', description: 'Receipt removal', expense_date: '2020-01-02T10:00:00Z', amount_paise: 10000 } })).json();
+    const claim = await (await employee.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: { title, category: 'travel and stay', description: 'Receipt removal', expense_date: '2020-01-02', amount_paise: 10000 } })).json();
     await signIn(page, 'employee');
     await page.getByRole('button', { name: title }).click();
     await page.getByRole('button', { name: 'Edit draft' }).click();
@@ -806,7 +806,7 @@ test('receipt guidance blocks submission until attached', async ({ page }) => {
     await page.getByRole('button', { name: 'New claim' }).click();
     await page.getByLabel('Claim title').fill(title);
     await page.getByLabel('Category').selectOption('meals');
-    await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+    await page.getByLabel('Expense date').fill('2020-01-02');
     await page.getByLabel('Requested amount (₹)').fill('100');
     await page.getByLabel('Business purpose / expense details').fill('Receipt guidance');
     const createdResponse = page.waitForResponse((response) => response.url().endsWith('/api/claims') && response.request().method() === 'POST');
@@ -840,8 +840,8 @@ test('receipt guidance blocks submission until attached', async ({ page }) => {
   } finally { await employee.dispose(); }
 });
 
-test('local expense time round trips without changing its instant', async ({ browser }) => {
-  const context = await browser.newContext({ baseURL: 'http://127.0.0.1:15173', timezoneId: 'Asia/Kolkata' });
+for (const timezoneId of ['Asia/Kolkata', 'America/New_York']) test(`expense date stays the same calendar date in ${timezoneId}`, async ({ browser }) => {
+  const context = await browser.newContext({ baseURL: 'http://127.0.0.1:15173', timezoneId });
   const page = await context.newPage();
   try {
     await page.goto('/');
@@ -850,78 +850,24 @@ test('local expense time round trips without changing its instant', async ({ bro
     await page.getByRole('button', { name: 'New claim' }).click();
     await page.getByLabel('Claim title').fill(title);
     await page.getByLabel('Category').selectOption('meals');
-    await page.getByLabel('Expense date and time').fill('2020-01-02T10:30');
+    await expect(page.getByLabel('Expense date', { exact: true })).toHaveAttribute('type', 'date');
+    await page.getByLabel('Expense date', { exact: true }).fill('2020-01-02');
     await page.getByLabel('Requested amount (₹)').fill('100');
     await page.getByLabel('Business purpose / expense details').fill('Timezone fixture');
     const response = page.waitForResponse((r) => r.url().endsWith('/api/claims') && r.request().method() === 'POST');
     await page.getByRole('button', { name: 'Save as draft' }).click();
-    const created = await (await response).json();
-    expect(new Date(created.expense_date).toISOString()).toBe('2020-01-02T05:00:00.000Z');
-    await expect(page.locator('.claim-facts')).toContainText('10:30:00');
-    await expect(page.locator('.claim-facts')).toContainText('Asia/Calcutta');
+    const createdResponse = await response;
+    expect(createdResponse.request().postDataJSON().expense_date).toBe('2020-01-02');
+    const created = await createdResponse.json();
+    expect(created.expense_date).toBe('2020-01-02');
+    await expect(page.locator('.claim-facts')).toContainText('2020-01-02');
     await page.getByRole('button', { name: 'Edit draft' }).click();
+    await expect(page.getByLabel('Expense date')).toHaveValue('2020-01-02');
     await page.getByLabel('Merchant').fill('Unrelated edit');
     const patch = page.waitForResponse((r) => r.url().endsWith(`/api/claims/${created.id}`) && r.request().method() === 'PATCH');
     await page.getByRole('button', { name: 'Save changes' }).click();
     expect((await (await patch).json()).expense_date).toBe(created.expense_date);
   } finally { await context.close(); }
-});
-
-test('nonexistent local expense time is rejected without creating a draft', async ({ browser }) => {
-  const context = await browser.newContext({ baseURL: 'http://127.0.0.1:15173', timezoneId: 'America/New_York' });
-  const page = await context.newPage();
-  try {
-    await page.goto('/');
-    await signIn(page, 'employee');
-    const title = `Spring gap ${randomUUID()}`;
-    let createRequests = 0;
-    page.on('request', (request) => {
-      if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/claims') createRequests += 1;
-    });
-    await page.getByRole('button', { name: 'New claim' }).click();
-    await page.getByLabel('Claim title').fill(title);
-    await page.getByLabel('Category').selectOption('meals');
-    await page.getByLabel('Expense date and time').fill('2025-03-09T02:30');
-    await page.getByLabel('Requested amount (₹)').fill('100');
-    await page.getByLabel('Business purpose / expense details').fill('Nonexistent local clock regression');
-    await page.getByRole('button', { name: 'Save as draft' }).click();
-    await expect.soft(page.getByRole('alert')).toContainText(/valid expense date and time/i, { timeout: 1000 });
-    await expect.soft(page.locator('.claim-form')).toBeVisible();
-    expect.soft(createRequests).toBe(0);
-    const claims = await (await page.request.get('/api/claims')).json();
-    expect.soft(claims.some((claim) => claim.title === title)).toBe(false);
-  } finally { await context.close(); }
-});
-
-test('unchanged stored instant characterization preserves repeated-hour precision', async ({ browser }) => {
-  const context = await browser.newContext({ baseURL: 'http://127.0.0.1:15173', timezoneId: 'America/New_York' });
-  const page = await context.newPage();
-  const employee = await request.newContext({ baseURL: 'http://127.0.0.1:15173' });
-  try {
-    expect((await employee.post('/api/auth/login', { data: { username: 'employee', password: 'employee123' } })).ok()).toBeTruthy();
-    const title = `Repeated hour ${randomUUID()}`;
-    const createdResponse = await employee.post('/api/claims', {
-      headers: { 'Idempotency-Key': randomUUID() },
-      data: { title, category: 'meals', description: 'Repeated-hour precision characterization', expense_date: '2024-11-03T06:30:12.123456Z', amount_paise: 10000 },
-    });
-    expect(createdResponse.ok()).toBeTruthy();
-    const created = await createdResponse.json();
-    expect(created.expense_date).toMatch(/\.123456(?:Z|\+00:00)$/);
-    await page.goto('/');
-    await signIn(page, 'employee');
-    await page.getByRole('button', { name: title }).click();
-    await page.getByRole('button', { name: 'Edit draft' }).click();
-    await expect(page.getByLabel('Expense date and time')).toHaveAttribute('step', '60');
-    await expect(page.getByLabel('Expense date and time')).toHaveValue('2024-11-03T01:30');
-    await page.getByLabel('Claim title').fill(`${title} edited`);
-    await page.getByLabel('Merchant').fill('Unrelated edit');
-    const patch = page.waitForResponse((response) => response.url().endsWith(`/api/claims/${created.id}`) && response.request().method() === 'PATCH');
-    await page.getByRole('button', { name: 'Save changes' }).click();
-    expect((await (await patch).json()).expense_date).toBe(created.expense_date);
-  } finally {
-    await employee.dispose();
-    await context.close();
-  }
 });
 
 test('legacy date and category remain visible and require correction', async ({ page }) => {
@@ -934,7 +880,7 @@ test('legacy date and category remain visible and require correction', async ({ 
       const title = `Legacy ${category} ${randomUUID()}`;
       const response = await employee.post('/api/claims', {
         headers: { 'Idempotency-Key': randomUUID() },
-        data: { title, category: 'meals', description: 'Legacy read fixture', expense_date: '2020-01-02T10:00:00Z', amount_paise: 10000 },
+        data: { title, category: 'meals', description: 'Legacy read fixture', expense_date: '2020-01-02', amount_paise: 10000 },
       });
       expect(response.ok()).toBeTruthy();
       return { ...(await response.json()), legacyCategory: category };
@@ -944,7 +890,8 @@ test('legacy date and category remain visible and require correction', async ({ 
     const legacy = (claim) => {
       const category = legacyById.get(claim.id);
       if (!category) return claim;
-      return { ...claim, category, expense_date: '2019-04-03', ...(claim.history ? { history: claim.history.map((event) => ({ ...event, category, expense_date: '2019-04-03' })) } : {}) };
+      const expense_date = category === 'constructor' ? '2019-04-03T23:30:00+00:00' : '2019-04-03';
+      return { ...claim, category, expense_date, ...(claim.history ? { history: claim.history.map((event) => ({ ...event, category, expense_date })) } : {}) };
     };
     await page.route('**/api/claims?*', async (route) => {
       if (route.request().method() !== 'GET') return route.continue();
@@ -969,12 +916,11 @@ test('legacy date and category remain visible and require correction', async ({ 
       await expect(row).toHaveCount(1);
       await expect(row).toContainText(claim.legacyCategory);
       await row.click();
-      await expect(page.locator('.claim-detail')).toContainText('2019-04-03 · time not recorded');
+      await expect(page.locator('.claim-detail')).toContainText('2019-04-03');
       await expect(page.locator('.timeline')).toContainText(claim.legacyCategory);
       await page.getByRole('button', { name: 'Edit draft' }).click();
       await expect(page.getByLabel('Category')).toHaveValue('');
-      await expect(page.getByLabel('Expense date and time')).toHaveValue('');
-      await expect(page.locator('.claim-form')).toContainText('Original date: 2019-04-03');
+      await expect(page.getByLabel('Expense date')).toHaveValue('2019-04-03');
       await expect(page.locator('.claim-form')).toContainText(`Original category: ${claim.legacyCategory}`);
       await page.getByRole('button', { name: 'Cancel' }).click();
     }
@@ -989,7 +935,7 @@ test('pagination uses server pages and status totals', async ({ page }) => {
     await employee.post('/api/auth/login', { data: { username: 'employee', password: 'employee123' } });
     const prefix = `Page ${randomUUID()}`;
     for (let i = 0; i < 12; i++) {
-      const response = await employee.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: { title: `${prefix} ${i}`, category: 'meals', description: 'Pagination', expense_date: '2020-01-02T10:00:00Z', amount_paise: 100 } });
+      const response = await employee.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: { title: `${prefix} ${i}`, category: 'meals', description: 'Pagination', expense_date: '2020-01-02', amount_paise: 100 } });
       expect(response.ok()).toBeTruthy();
       created.push(await response.json());
     }
@@ -1071,9 +1017,8 @@ test('upfront receipt submission validates before mutation and retries upload', 
   await expect(page.getByLabel('Category')).toHaveJSProperty('tagName', 'SELECT');
   await expect(page.getByLabel('Category').locator('option')).toHaveText(['Choose a category', 'Travel and Stay', 'Meals', 'Work & Tech', 'Others']);
   expect(await page.getByLabel('Category').locator('option').evaluateAll((options) => options.map((option) => option.value))).toEqual(['', 'travel and stay', 'meals', 'work & tech', 'others']);
-  await expect(page.getByLabel('Expense date and time')).toHaveAttribute('type', 'datetime-local');
-  await expect(page.getByLabel('Expense date and time')).toHaveAttribute('step', '60');
-  await expect(page.getByLabel('Expense date and time')).toHaveAttribute('required', '');
+  await expect(page.getByLabel('Expense date')).toHaveAttribute('type', 'date');
+  await expect(page.getByLabel('Expense date')).toHaveAttribute('required', '');
   expect(await page.locator('.claim-form').evaluate(form => {
     const fields = [...form.querySelectorAll('select, input')];
     return fields.findIndex(field => field.type === 'file') === fields.findIndex(field => field.name === 'category') + 1
@@ -1083,7 +1028,7 @@ test('upfront receipt submission validates before mutation and retries upload', 
   const title = `Upfront ${randomUUID()}`;
   await page.getByLabel('Claim title').fill(title);
   await page.getByLabel('Category').selectOption('meals');
-  await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+  await page.getByLabel('Expense date').fill('2020-01-02');
   await page.getByLabel('Requested amount (₹)').fill('100');
   await page.getByLabel('Business purpose / expense details').fill('Upfront receipt');
   const mutations = [];
@@ -1129,7 +1074,7 @@ test('upfront receipt submission validates before mutation and retries upload', 
   await page.getByLabel('Claim title').fill(`Draft with receipt ${randomUUID()}`);
   await page.getByLabel('Category').selectOption('meals');
   await page.getByLabel('Choose receipt').setInputFiles({ name: 'draft.png', mimeType: 'image/png', buffer: receiptPng });
-  await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+  await page.getByLabel('Expense date').fill('2020-01-02');
   await page.getByLabel('Requested amount (₹)').fill('10');
   await page.getByLabel('Business purpose / expense details').fill('Draft receipt');
   const beforeClear = mutations.length;
@@ -1160,7 +1105,7 @@ for (const lost of ['create', 'patch', 'rejected patch', 'upload', 'submit', 'cr
     const title = `Lost ${lost} ${randomUUID()}`;
     await page.getByLabel('Claim title').fill(title);
     await page.getByLabel('Category').selectOption('meals');
-    await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+    await page.getByLabel('Expense date').fill('2020-01-02');
     await page.getByLabel('Requested amount (₹)').fill('100');
     await page.getByLabel('Business purpose / expense details').fill('Lost response control');
     if (lost === 'upload' || lost === 'submit') await page.getByLabel('Choose receipt').setInputFiles({ name: 'bill.png', mimeType: 'image/png', buffer: receiptPng });
@@ -1304,12 +1249,12 @@ test('form stale edit refreshes instead of overwriting another change', async ({
   await page.goto('/');
   await signIn(page, 'employee');
   const title = `Form conflict ${randomUUID()}`;
-  const created = await (await page.request.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: { title, category: 'meals', description: 'Conflict fixture', expense_date: '2020-01-02T10:00:00Z', amount_paise: 10000 } })).json();
+  const created = await (await page.request.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: { title, category: 'meals', description: 'Conflict fixture', expense_date: '2020-01-02', amount_paise: 10000 } })).json();
   await page.reload();
   await page.getByRole('button', { name: title }).click();
   await page.getByRole('button', { name: 'Edit draft' }).click();
   await page.getByLabel('Merchant').fill('Local change');
-  const external = await page.request.patch(`/api/claims/${created.id}`, { data: { title, category: 'meals', description: 'Conflict fixture', expense_date: '2020-01-02T10:00:00Z', amount_paise: 10000, merchant: 'External change', version: created.version } });
+  const external = await page.request.patch(`/api/claims/${created.id}`, { data: { title, category: 'meals', description: 'Conflict fixture', expense_date: '2020-01-02', amount_paise: 10000, merchant: 'External change', version: created.version } });
   expect(external.ok()).toBeTruthy();
   await page.getByRole('button', { name: 'Save changes' }).click();
   await expect(page.getByRole('alert')).toContainText('changed since it was opened');
@@ -1357,7 +1302,7 @@ test('expired session invalidates delayed form persistence before a new form', a
     await page.getByLabel('Claim title').fill(`Old session ${randomUUID()}`);
     await page.getByLabel('Category').selectOption('meals');
     await page.getByLabel('Choose receipt').setInputFiles({ name: 'old.png', mimeType: 'image/png', buffer: receiptPng });
-    await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+    await page.getByLabel('Expense date').fill('2020-01-02');
     await page.getByLabel('Requested amount (₹)').fill('10');
     await page.getByLabel('Business purpose / expense details').fill('Old session');
     await page.getByRole('button', { name: 'Submit', exact: true }).click();
@@ -1372,7 +1317,7 @@ test('expired session invalidates delayed form persistence before a new form', a
     const newTitle = `New session ${randomUUID()}`;
     await page.getByLabel('Claim title').fill(newTitle);
     await page.getByLabel('Category').selectOption('others');
-    await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+    await page.getByLabel('Expense date').fill('2020-01-02');
     await page.getByLabel('Requested amount (₹)').fill('20');
     await page.getByLabel('Business purpose / expense details').fill('New form must survive');
     await page.getByRole('button', { name: 'Save as draft' }).click();
