@@ -69,3 +69,6 @@ npm run build
 API tests cover lifecycle transitions, ownership, amounts, history, duplicate requests and concurrent reviews. Frontend tests cover the user workflows, permissions, confirmations, session handling and responsive layout. Playwright uses separate test servers and an isolated database, not the local showcase data.
 
 ## Known limitations
+
+- Claim lists are not paginated; large histories may increase response times and browser rendering cost.
+- SQLite permits one writer at a time. Concurrent writes are handled safely, but contention can return a retryable conflict. High-concurrency performance has not been load-tested.
