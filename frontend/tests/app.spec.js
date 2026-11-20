@@ -104,7 +104,7 @@ test('pending logout prevents draft creation', async ({ page }) => {
   await page.getByLabel('Category').fill('Other');
   await page.getByLabel('Expense date').fill(new Date().toISOString().slice(0, 10));
   await page.getByLabel('Requested amount (₹)').fill('10');
-  await page.getByLabel('Description').fill('Check logout guard');
+  await page.getByLabel('Business purpose / expense details').fill('Check logout guard');
 
   let releaseLogout;
   const logoutGate = new Promise((resolve) => { releaseLogout = resolve; });
@@ -156,7 +156,7 @@ test('sign in, restore, log out and expire a session', async ({ page }) => {
   await page.getByLabel('Category').fill('Other');
   await page.getByLabel('Expense date').fill(new Date().toISOString().slice(0, 10));
   await page.getByLabel('Requested amount (₹)').fill('10');
-  await page.getByLabel('Description').fill('Session expiry check');
+  await page.getByLabel('Business purpose / expense details').fill('Session expiry check');
   await page.getByRole('button', { name: 'Create draft' }).click();
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
   await expect(page.getByRole('alert')).toContainText('session has expired');
@@ -210,7 +210,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByLabel('Category').fill('Office');
   await page.getByLabel('Expense date').fill(expenseDate);
   await page.getByLabel('Requested amount (₹)').fill('900');
-  await page.getByLabel('Description').fill('Temporary draft to check edit and delete.');
+  await page.getByLabel('Business purpose / expense details').fill('Temporary draft to check edit and delete.');
   await page.getByRole('button', { name: 'Create draft' }).click();
   await expect(page.locator('.form-error')).toContainText('fetch');
   await page.getByRole('button', { name: 'Create draft' }).click();
@@ -236,7 +236,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByLabel('Category').fill('Travel');
   await page.getByLabel('Expense date').fill(expenseDate);
   await page.getByLabel('Requested amount (₹)').fill('8000');
-  await page.getByLabel('Description').fill('Airport transfer for a client visit.');
+  await page.getByLabel('Business purpose / expense details').fill('Airport transfer for a client visit.');
   await page.getByRole('button', { name: 'Create draft' }).click();
   await expect(page.getByRole('heading', { name: 'Airport taxi' })).toBeVisible();
   await submitClaim(page);
@@ -267,7 +267,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByLabel('Category').fill('Accommodation');
   await page.getByLabel('Expense date').fill(expenseDate);
   await page.getByLabel('Requested amount (₹)').fill('2000');
-  await page.getByLabel('Description').fill('Hotel stay during a work trip.');
+  await page.getByLabel('Business purpose / expense details').fill('Hotel stay during a work trip.');
   await page.getByRole('button', { name: 'Create draft' }).click();
   await submitClaim(page);
   await expect(page.locator('.claim-detail .status-chip.status-submitted')).toBeVisible();
@@ -286,7 +286,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByRole('button', { name: /Hotel correction/ }).click();
   await page.getByRole('button', { name: 'Edit correction' }).click();
   await page.getByLabel('Requested amount (₹)').fill('1900');
-  await page.getByLabel('Description').fill('Corrected total after checking the receipt.');
+  await page.getByLabel('Business purpose / expense details').fill('Corrected total after checking the receipt.');
   await page.getByRole('button', { name: 'Save changes' }).click();
   await expect(page.locator('.claim-detail .status-chip.status-draft')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Delete draft' })).toHaveCount(0);
@@ -325,7 +325,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByLabel('Category').fill('Other');
   await page.getByLabel('Expense date').fill(expenseDate);
   await page.getByLabel('Requested amount (₹)').fill('100');
-  await page.getByLabel('Description').fill('Verify that a stale approval is not replayed.');
+  await page.getByLabel('Business purpose / expense details').fill('Verify that a stale approval is not replayed.');
   await page.getByRole('button', { name: 'Create draft' }).click();
   await expect(page.getByRole('heading', { name: 'Stale review guard' })).toBeVisible();
   const claimLabel = await page.locator('.claim-detail .eyebrow').textContent();
@@ -362,7 +362,7 @@ test('approver owns claims but cannot review their own submission', async ({ pag
   await page.getByLabel('Category').fill('Travel');
   await page.getByLabel('Expense date').fill(new Date().toISOString().slice(0, 10));
   await page.getByLabel('Requested amount (₹)').fill('100');
-  await page.getByLabel('Description').fill('Own expense');
+  await page.getByLabel('Business purpose / expense details').fill('Own expense');
   await page.getByRole('button', { name: 'Create draft' }).click();
   await expect(page.getByRole('button', { name: 'Edit draft' })).toBeVisible();
   const claimId = Number((await page.locator('.claim-detail .eyebrow').textContent()).match(/#(\d+)/)[1]);
@@ -629,5 +629,94 @@ test('confirmation submits the captured version after an external edit', async (
     const after = await (await employee.get(`/api/claims/${claim.id}`)).json();
     expect(after.status).toBe('DRAFT');
     expect(after.history.filter((event) => event.action === 'SUBMITTED')).toHaveLength(0);
+  } finally { await employee.dispose(); }
+});
+
+
+test('receipt attaches to a merchant draft', async ({ page }) => {
+  const title = 'Receipt ' + randomUUID();
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aKsAAAAASUVORK5CYII=', 'base64');
+  const pdf = Buffer.from('JVBERi0xLjMKJeLjz9MKMSAwIG9iago8PAovUHJvZHVjZXIgKHB5cGRmKQo+PgplbmRvYmoKMiAwIG9iago8PAovVHlwZSAvUGFnZXMKL0NvdW50IDEKL0tpZHMgWyA0IDAgUiBdCj4+CmVuZG9iagozIDAgb2JqCjw8Ci9UeXBlIC9DYXRhbG9nCi9QYWdlcyAyIDAgUgo+PgplbmRvYmoKNCAwIG9iago8PAovVHlwZSAvUGFnZQovUmVzb3VyY2VzIDw8Cj4+Ci9NZWRpYUJveCBbIDAuMCAwLjAgNzIgNzIgXQovUGFyZW50IDIgMCBSCj4+CmVuZG9iagp4cmVmCjAgNQowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMTUgMDAwMDAgbiAKMDAwMDAwMDA1NCAwMDAwMCBuIAowMDAwMDAwMTEzIDAwMDAwIG4gCjAwMDAwMDAxNjIgMDAwMDAgbiAKdHJhaWxlcgo8PAovU2l6ZSA1Ci9Sb290IDMgMCBSCi9JbmZvIDEgMCBSCj4+CnN0YXJ0eHJlZgoyNTQKJSVFT0YK', 'base64');
+  await page.goto('/');
+  await signIn(page, 'employee');
+  await page.getByRole('button', { name: 'New claim' }).click();
+  await page.getByLabel('Claim title').fill(title);
+  await page.getByLabel('Category').fill('Travel');
+  await page.getByLabel('Requested amount (₹)').fill('100');
+  await page.getByLabel('Business purpose / expense details').fill('Client visit');
+  await page.getByLabel('Merchant').fill('Example shop');
+  await page.getByRole('button', { name: 'Create draft' }).click();
+  await expect(page.getByText('Example shop', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Receipt', exact: true })).toBeVisible();
+  await page.getByLabel('Choose receipt').setInputFiles({ name: 'bill.png', mimeType: 'image/png', buffer: png });
+  await page.getByRole('button', { name: 'Attach receipt' }).click();
+  await expect(page.getByRole('img', { name: 'Receipt preview' })).toBeVisible();
+  const src = await page.getByRole('img', { name: 'Receipt preview' }).getAttribute('src');
+  expect(src).toMatch(/^\/api\/claims\/\d+\/receipts\/\d+$/);
+  expect(await (await page.request.get(src)).body()).toEqual(png);
+  await page.getByRole('button', { name: 'Edit draft' }).click();
+  await page.getByLabel('Merchant').fill('Updated shop');
+  await page.getByRole('button', { name: 'Save changes' }).click();
+  await expect(page.getByText('Updated shop', { exact: true })).toBeVisible();
+  await submitClaim(page);
+  await expect(page.getByRole('img', { name: 'Receipt preview' })).toBeVisible();
+  await expect(page.getByLabel('Choose receipt')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Log out' }).click();
+  await signIn(page, 'manager');
+  await page.getByRole('button', { name: 'Approvals', exact: true }).click();
+  await page.getByRole('button', { name: title }).click();
+  await expect(page.getByRole('img', { name: 'Receipt preview' })).toBeVisible();
+  await expect(page.getByLabel('Choose receipt')).toHaveCount(0);
+  await page.getByLabel('Review comment').fill('Please correct the receipt');
+  await page.getByRole('button', { name: 'Reject claim' }).click();
+  await switchUser(page, 'employee');
+  await page.getByRole('button', { name: title }).click();
+  await page.getByLabel('Choose receipt').setInputFiles({ name: 'corrected.pdf', mimeType: 'application/pdf', buffer: pdf });
+  await page.getByRole('button', { name: 'Replace receipt' }).click();
+  await expect(page.getByRole('link', { name: 'Download receipt' })).toBeVisible();
+  await expect(page.locator('.claim-detail .status-chip.status-draft')).toBeVisible();
+  const oldLink = page.locator('.timeline-event').filter({ hasText: 'Receipt attached' }).getByRole('link', { name: 'View receipt' });
+  expect(await oldLink.getAttribute('href')).toBe(src);
+  expect(await (await page.request.get(await oldLink.getAttribute('href'))).body()).toEqual(png);
+});
+
+test('receipt validation and removal preserve history on narrow screens', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.goto('/');
+  const employee = await request.newContext({ baseURL: new URL(page.url()).origin });
+  try {
+    expect((await employee.post('/api/auth/login', { data: { username: 'employee', password: 'employee123' } })).ok()).toBeTruthy();
+    const title = 'Removal ' + randomUUID();
+    const claim = await (await employee.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: { title, category: 'Travel', description: 'Receipt removal', expense_date: new Date().toISOString().slice(0, 10), amount_paise: 10000 } })).json();
+    await signIn(page, 'employee');
+    await page.getByRole('button', { name: title }).click();
+    await page.getByLabel('Choose receipt').setInputFiles({ name: 'bad.txt', mimeType: 'text/plain', buffer: Buffer.from('bad') });
+    await expect(page.getByRole('alert')).toContainText('Choose a PNG');
+    await page.getByLabel('Choose receipt').setInputFiles({ name: 'large.png', mimeType: 'image/png', buffer: Buffer.alloc(5 * 1024 * 1024 + 1) });
+    await expect(page.getByRole('alert')).toContainText('5 MiB');
+    expect((await (await employee.get(`/api/claims/${claim.id}`)).json()).version).toBe(claim.version);
+    await page.getByLabel('Choose receipt').setInputFiles({ name: 'bill.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aKsAAAAASUVORK5CYII=', 'base64') });
+    await page.getByRole('button', { name: 'Attach receipt' }).click();
+    await expect(page.getByRole('img', { name: 'Receipt preview' })).toBeVisible();
+    let deletes = 0;
+    page.on('request', (req) => { if (req.method() === 'DELETE' && new URL(req.url()).pathname === `/api/claims/${claim.id}/receipt`) deletes += 1; });
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      for (const button of await page.locator('.receipt-panel button').all()) expect((await button.boundingBox()).height).toBeGreaterThanOrEqual(44);
+    }
+    await page.getByRole('button', { name: 'Remove receipt' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Remove receipt?' });
+    await expect(dialog).toContainText('bill.png');
+    await page.keyboard.press('Escape');
+    expect(deletes).toBe(0);
+    await page.getByRole('button', { name: 'Remove receipt' }).click();
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    expect(deletes).toBe(0);
+    await page.getByRole('button', { name: 'Remove receipt' }).click();
+    await dialog.getByRole('button', { name: 'Remove receipt' }).click();
+    await expect(page.getByText('No receipt attached')).toBeVisible();
+    expect(deletes).toBe(1);
+    await expect(page.getByText('Receipt removed', { exact: true })).toBeVisible();
   } finally { await employee.dispose(); }
 });

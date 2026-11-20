@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatRupees, parseRupees } from './money.js';
 import ConfirmDialog from './ConfirmDialog.jsx';
+import ReceiptPanel from './ReceiptPanel.jsx';
 
 const FILTERS = [
   { id: 'ALL', label: 'All claims' },
@@ -31,6 +32,9 @@ const ACTION_LABELS = {
   APPROVED: 'Approved',
   REJECTED: 'Rejected',
   PAID: 'Marked as paid',
+  RECEIPT_ATTACHED: 'Receipt attached',
+  RECEIPT_REPLACED: 'Receipt replaced',
+  RECEIPT_REMOVED: 'Receipt removed',
 };
 
 function apiErrorMessage(payload) {
@@ -44,7 +48,7 @@ function apiErrorMessage(payload) {
 
 async function api(path, userId, options = {}) {
   const headers = new Headers(options.headers || {});
-  if (options.body !== undefined) headers.set('Content-Type', 'application/json');
+  if (options.body !== undefined && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   const response = await fetch(path, { ...options, headers, credentials: 'same-origin' });
   if (response.status === 204) return null;
   const payload = await response.json().catch(() => ({}));
@@ -114,6 +118,7 @@ function ClaimForm({ values, onChange, onSubmit, onCancel, submitLabel, error, b
       <div className="form-heading">
         <h3>{submitLabel === 'Create draft' ? 'New expense claim' : 'Claim details'}</h3>
         <p>Enter one INR expense. You can review a draft before submitting.</p>
+        {submitLabel === 'Create draft' && <p>Attach a receipt after saving the draft.</p>}
       </div>
       <label>
         Claim title
@@ -140,7 +145,11 @@ function ClaimForm({ values, onChange, onSubmit, onCancel, submitLabel, error, b
         />
       </label>
       <label>
-        Description
+        Merchant <span className="label-help">(optional)</span>
+        <input maxLength="120" name="merchant" value={values.merchant} onChange={update('merchant')} />
+      </label>
+      <label>
+        Business purpose / expense details
         <textarea maxLength="2000" name="description" rows="3" value={values.description} onChange={update('description')} required />
       </label>
       {error && <p className="form-error" role="alert">{error}</p>}
@@ -152,7 +161,7 @@ function ClaimForm({ values, onChange, onSubmit, onCancel, submitLabel, error, b
   );
 }
 
-function History({ events }) {
+function History({ events, claimId }) {
   return (
     <section className="history-section" aria-labelledby="history-heading">
       <div className="section-title-row">
@@ -178,6 +187,8 @@ function History({ events }) {
                     <> · Approved {formatRupees(event.approved_amount_paise)}</>
                   )}
                 </p>
+                {event.merchant && <p className="event-expense">Merchant: {event.merchant}</p>}
+                {event.receipt && <p className="event-expense">Receipt: {event.receipt.filename} · <a href={`/api/claims/${claimId}/receipts/${event.receipt.id}`}>View receipt</a></p>}
                 {event.comment && <p className="event-comment">“{event.comment}”</p>}
               </div>
             </li>
@@ -353,7 +364,7 @@ export default function App() {
     setConflictNotice('');
     setDetailError('');
     setFormError('');
-    setFormValues({ title: '', description: '', category: '', expense_date: todayString(), amount: '' });
+    setFormValues({ title: '', merchant: '', description: '', category: '', expense_date: todayString(), amount: '' });
     setFormMode('create');
   }
 
@@ -364,6 +375,7 @@ export default function App() {
     setFormError('');
     setFormValues({
       title: currentDetail.title,
+      merchant: currentDetail.merchant || '',
       description: currentDetail.description,
       category: currentDetail.category,
       expense_date: currentDetail.expense_date,
@@ -390,6 +402,7 @@ export default function App() {
       if (!formValues.expense_date || formValues.expense_date > todayString()) throw new Error('Choose a valid expense date that is not in the future.');
       payload = {
         title: formValues.title,
+        merchant: formValues.merchant,
         description: formValues.description,
         category: formValues.category,
         expense_date: formValues.expense_date,
@@ -435,6 +448,7 @@ export default function App() {
     if (!currentDetail || authBusy || pendingMutation || confirmationRef.current) return;
     const snapshot = {
       type, id: currentDetail.id, version: currentDetail.version, title: currentDetail.title,
+      filename: currentDetail.receipt?.filename,
       userId, workspace, trigger: event.currentTarget,
       resubmission: currentDetail.history.some((item) => item.action === 'SUBMITTED'),
     };
@@ -450,11 +464,25 @@ export default function App() {
       await runMutation('Deleting draft',
         () => api(`/api/claims/${snapshot.id}?version=${snapshot.version}`, snapshot.userId, { method: 'DELETE' }),
         'Draft deleted.', () => { setSelectedId(null); setFormMode(null); });
+    } else if (snapshot.type === 'removeReceipt') {
+      await runMutation('Removing receipt',
+        () => api(`/api/claims/${snapshot.id}/receipt?version=${snapshot.version}`, snapshot.userId, { method: 'DELETE' }),
+        'Receipt removed.');
     } else {
       await runMutation('Submitting claim',
         () => api(`/api/claims/${snapshot.id}/submit`, snapshot.userId, { method: 'POST', body: JSON.stringify({ version: snapshot.version }) }),
         'Claim submitted for review.');
     }
+  }
+
+  async function uploadReceipt(file) {
+    if (!currentDetail || authBusy || pendingMutation) return null;
+    const snapshot = { id: currentDetail.id, version: currentDetail.version, userId, workspace };
+    return runMutation('Uploading receipt',
+      () => api(`/api/claims/${snapshot.id}/receipt?version=${snapshot.version}&filename=${encodeURIComponent(file.name)}`, snapshot.userId, {
+        method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file,
+      }),
+      'Receipt saved.');
   }
 
   async function approveClaim(event) {
@@ -743,8 +771,11 @@ export default function App() {
                 <dl className="claim-facts">
                   <div><dt>Category</dt><dd>{currentDetail.category}</dd></div>
                   <div><dt>Expense date</dt><dd>{dateLabel(currentDetail.expense_date)}</dd></div>
-                  <div className="description-fact"><dt>Description</dt><dd>{currentDetail.description}</dd></div>
+                  <div><dt>Merchant</dt><dd>{currentDetail.merchant || 'Not provided'}</dd></div>
+                  <div className="description-fact"><dt>Business purpose / expense details</dt><dd>{currentDetail.description}</dd></div>
                 </dl>
+
+                <ReceiptPanel key={`${scopeKey}:${currentDetail.id}:${currentDetail.version}`} claim={currentDetail} editable={actions.includes('edit')} busy={authBusy || Boolean(pendingMutation)} onUpload={uploadReceipt} onRemove={(event) => openConfirmation('removeReceipt', event)} />
 
                 {detailError && !formMode && <div className="banner banner-error detail-banner" role="alert">{detailError}</div>}
 
@@ -787,17 +818,17 @@ export default function App() {
                   </div>
                 )}
                 {actions.includes('submit') && currentDetail.status === 'DRAFT' && <p className="readonly-hint">Once submitted, this claim is locked while it is under review.</p>}
-                <History events={currentDetail.history || []} />
+                <History events={currentDetail.history || []} claimId={currentDetail.id} />
               </article>
             )}
           </section>
         </div>
       </main>
       {confirmation && <ConfirmDialog
-        title={`${confirmation.type === 'delete' ? 'Delete draft' : confirmation.resubmission ? 'Resubmit claim' : 'Submit claim'}?`}
-        description={confirmation.type === 'delete' ? 'This action cannot be undone.' : 'This claim will be locked while it is under review.'}
-        claimTitle={confirmation.title}
-        confirmLabel={confirmation.type === 'delete' ? 'Delete draft' : confirmation.resubmission ? 'Resubmit claim' : 'Submit claim'}
+        title={`${confirmation.type === 'removeReceipt' ? 'Remove receipt' : confirmation.type === 'delete' ? 'Delete draft' : confirmation.resubmission ? 'Resubmit claim' : 'Submit claim'}?`}
+        description={confirmation.type === 'removeReceipt' ? 'The current receipt will be removed, but its history is retained.' : confirmation.type === 'delete' ? 'This action cannot be undone.' : 'This claim will be locked while it is under review.'}
+        claimTitle={confirmation.type === 'removeReceipt' ? `${confirmation.title} · ${confirmation.filename}` : confirmation.title}
+        confirmLabel={confirmation.type === 'removeReceipt' ? 'Remove receipt' : confirmation.type === 'delete' ? 'Delete draft' : confirmation.resubmission ? 'Resubmit claim' : 'Submit claim'}
         trigger={confirmation.trigger}
         onCancel={dismissConfirmation}
         onConfirm={confirmOperation}

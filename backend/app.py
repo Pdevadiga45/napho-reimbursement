@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import sqlite3
+from urllib.parse import quote
 from contextlib import asynccontextmanager, contextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -18,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_v
 from starlette.middleware.sessions import SessionMiddleware
 
 import store
+import receipts
 from db import Database
 from policy import allowed_actions, can_view, permissions_for
 
@@ -45,6 +47,12 @@ class ClaimFields(APIModel):
     category: StrictStr = Field(max_length=80)
     expense_date: date
     amount_paise: StrictInt = Field(gt=0, le=MAX_AMOUNT_PAISE)
+    merchant: StrictStr = Field(default="", max_length=120)
+
+    @field_validator("merchant", mode="before")
+    @classmethod
+    def trim_merchant(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
 
     @field_validator("title", "description", "category")
     @classmethod
@@ -98,7 +106,14 @@ def claim_values(model: ClaimFields) -> dict[str, Any]:
         "category": model.category,
         "expense_date": model.expense_date.isoformat(),
         "amount_paise": model.amount_paise,
+        "merchant": model.merchant,
     }
+
+
+def receipt_metadata(row: sqlite3.Row) -> dict[str, Any] | None:
+    if row["receipt_id"] is None:
+        return None
+    return {key: row[f"receipt_{key}"] for key in ("id", "filename", "content_type", "size", "sha256", "created_at")}
 
 
 def claim_response(row: sqlite3.Row, user: dict[str, Any]) -> dict[str, Any]:
@@ -116,9 +131,10 @@ def claim_response(row: sqlite3.Row, user: dict[str, Any]) -> dict[str, Any]:
         "created_at",
         "updated_at",
         "version",
+        "merchant",
     )
     return {**{field: row[field] for field in fields}, "has_review_history": bool(row["has_review_history"]),
-            "allowed_actions": allowed_actions(user, row)}
+            "allowed_actions": allowed_actions(user, row), "receipt": receipt_metadata(row)}
 
 
 @contextmanager
@@ -240,7 +256,9 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         with write_transaction(database) as connection:
             existing = store.find_creation(connection, user["id"], str(idempotency_key))
             if existing is not None:
-                if existing["creation_payload"] != canonical:
+                previous = json.loads(existing["creation_payload"])
+                previous.setdefault("merchant", "")
+                if previous != values:
                     raise HTTPException(
                         status_code=409,
                         detail="Idempotency-Key was already used with a different payload",
@@ -267,7 +285,11 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 raise HTTPException(status_code=404, detail="Claim not found")
             require_owner_or_approver_view(user, row)
             result = claim_response(row, user)
-            result["history"] = [dict(event) for event in store.fetch_events(connection, claim_id)]
+            result["history"] = []
+            for event in store.fetch_events(connection, claim_id):
+                item = {key: event[key] for key in event.keys() if not key.startswith("receipt_")}
+                item["receipt"] = receipt_metadata(event)
+                result["history"].append(item)
             return result
         finally:
             connection.close()
@@ -290,6 +312,8 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             if "edit" not in allowed_actions(user, row):
                 raise HTTPException(status_code=409, detail="Claim cannot be edited in its current status")
             values = claim_values(body)
+            if "merchant" not in body.model_fields_set:
+                values["merchant"] = row["merchant"]
             next_status = "DRAFT"
             now = utc_now()
             updated = store.edit_claim(connection, claim_id, body.version, values, next_status, now)
@@ -420,6 +444,94 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             row = store.fetch_claim(connection, claim_id)
             store.append_event(connection, row, user["id"], "PAID", None, now)
             return claim_response(row, user)
+
+    def editable_receipt_claim(connection: sqlite3.Connection, claim_id: int, version: int, user: dict[str, Any]) -> sqlite3.Row:
+        row = store.fetch_claim(connection, claim_id)
+        if row is None or row["owner_id"] != user["id"]:
+            raise HTTPException(status_code=404, detail="Claim not found")
+        if row["version"] != version:
+            raise HTTPException(status_code=409, detail="Claim version is stale")
+        if "edit" not in allowed_actions(user, row):
+            raise HTTPException(status_code=409, detail="Claim cannot be edited in its current status")
+        return row
+
+    @application.post("/api/claims/{claim_id}/receipt")
+    async def upload_receipt(request: Request, claim_id: int = PathParam(gt=0), version: int = Query(gt=0),
+                             filename: str = Query(), user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        require_permission(user, "create_claims")
+        database = request.app.state.database
+        connection = database.connect()
+        try:
+            editable_receipt_claim(connection, claim_id, version, user)
+        finally:
+            connection.close()
+        length = request.headers.get("content-length")
+        if length is not None:
+            try:
+                parsed_length = int(length)
+                if parsed_length < 0:
+                    raise ValueError()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid Content-Length")
+            if parsed_length > receipts.MAX_BYTES:
+                raise HTTPException(status_code=413, detail="Receipt exceeds 5 MiB")
+        data = bytearray()
+        async for chunk in request.stream():
+            if len(data) + len(chunk) > receipts.MAX_BYTES:
+                raise HTTPException(status_code=413, detail="Receipt exceeds 5 MiB")
+            data.extend(chunk)
+        content = bytes(data)
+        try:
+            content_type, digest = receipts.validate_receipt(filename, content)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        with write_transaction(database) as connection:
+            row = editable_receipt_claim(connection, claim_id, version, user)
+            now = utc_now()
+            receipt_id = store.insert_receipt(connection, claim_id, user["id"], filename, content_type, content, digest, now)
+            if store.update_receipt(connection, claim_id, version, receipt_id, now) != 1:
+                raise HTTPException(status_code=409, detail="Claim version is stale")
+            action = "RECEIPT_REPLACED" if row["current_receipt_id"] is not None else "RECEIPT_ATTACHED"
+            row = store.fetch_claim(connection, claim_id)
+            store.append_event(connection, row, user["id"], action, None, now)
+            return claim_response(row, user)
+
+    @application.delete("/api/claims/{claim_id}/receipt")
+    def remove_receipt(request: Request, claim_id: int = PathParam(gt=0), version: int = Query(gt=0),
+                       user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        require_permission(user, "create_claims")
+        with write_transaction(request.app.state.database) as connection:
+            row = editable_receipt_claim(connection, claim_id, version, user)
+            if row["current_receipt_id"] is None:
+                raise HTTPException(status_code=409, detail="Claim has no receipt")
+            now = utc_now()
+            if store.update_receipt(connection, claim_id, version, None, now) != 1:
+                raise HTTPException(status_code=409, detail="Claim version is stale")
+            row = store.fetch_claim(connection, claim_id)
+            store.append_event(connection, row, user["id"], "RECEIPT_REMOVED", None, now)
+            return claim_response(row, user)
+
+    @application.get("/api/claims/{claim_id}/receipts/{receipt_id}")
+    def download_receipt(request: Request, claim_id: int = PathParam(gt=0), receipt_id: int = PathParam(gt=0),
+                         user: dict[str, Any] = Depends(current_user)) -> Response:
+        connection = request.app.state.database.connect()
+        try:
+            claim = store.fetch_claim(connection, claim_id)
+            if claim is None:
+                raise HTTPException(status_code=404, detail="Claim not found")
+            require_owner_or_approver_view(user, claim)
+            receipt = store.fetch_receipt_content(connection, claim_id, receipt_id)
+            if receipt is None:
+                raise HTTPException(status_code=404, detail="Receipt not found")
+            filename = receipt["filename"]
+            fallback = "".join(c if 32 <= ord(c) < 127 and c not in '\"\\' else "_" for c in filename)
+            disposition = "attachment" if receipt["content_type"] == "application/pdf" else "inline"
+            return Response(content=receipt["content"], media_type=receipt["content_type"], headers={
+                "Content-Disposition": f"{disposition}; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}",
+                "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store",
+            })
+        finally:
+            connection.close()
 
     return application
 

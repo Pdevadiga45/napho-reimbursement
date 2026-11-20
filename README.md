@@ -20,6 +20,8 @@ npm run dev -- --host 127.0.0.1
 
 Open http://127.0.0.1:5173. API documentation is available at http://127.0.0.1:8000/docs.
 
+Add an optional merchant when creating or editing a claim. After saving a draft, attach one receipt from the claim details; owners can replace or remove it while the claim is editable. PNG, JPG, JPEG and PDF files are supported up to 5 MiB, with images limited to 20 megapixels and unencrypted PDFs to 10 pages. Submitted claims show the receipt to authorized reviewers.
+
 | Account | Username | Password |
 | --- | --- | --- |
 | Employee One | `employee` | `employee123` |
@@ -42,6 +44,7 @@ Startup creates the schema and mock accounts. Data persists in `backend/napho.sq
 - The backend enforces permissions, ownership and valid states. Managers can submit their own claims but cannot review or mark them paid.
 - Transactions and version checks reject stale competing actions with HTTP 409. Per-owner idempotency keys prevent duplicate creation; workflow changes and their history are recorded together.
 - Only never-submitted drafts can be deleted. Corrections and resubmissions retain previous decisions and remain accessible to authorized reviewers.
+- Receipt bytes are stored privately in SQLite. Claim history records receipt snapshots and retains links to earlier files after replacement or removal.
 
 ## Assumptions
 

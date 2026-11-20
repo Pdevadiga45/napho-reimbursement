@@ -4,12 +4,15 @@ import sqlite3
 from typing import Any
 
 
-CLAIM_PROJECTION = """SELECT c.*, u.name AS owner_name,
+RECEIPT_FIELDS = "r.id AS receipt_id, r.filename AS receipt_filename, r.content_type AS receipt_content_type, r.size AS receipt_size, r.sha256 AS receipt_sha256, r.created_at AS receipt_created_at"
+
+CLAIM_PROJECTION = f"""SELECT c.*, u.name AS owner_name, {RECEIPT_FIELDS},
                   EXISTS(SELECT 1 FROM claim_events e WHERE e.claim_id = c.id
                          AND e.action IN ('APPROVED', 'REJECTED')) AS has_review_history,
                   EXISTS(SELECT 1 FROM claim_events e WHERE e.claim_id = c.id
                          AND e.action = 'SUBMITTED') AS has_submission_history
-           FROM claims c JOIN users u ON u.id = c.owner_id"""
+           FROM claims c JOIN users u ON u.id = c.owner_id
+           LEFT JOIN claim_receipts r ON r.id = c.current_receipt_id AND r.claim_id = c.id"""
 
 
 def fetch_user(connection: sqlite3.Connection, user_id: int) -> sqlite3.Row | None:
@@ -46,10 +49,10 @@ def create_claim(connection: sqlite3.Connection, owner_id: int, values: dict[str
         """INSERT INTO claims (
                owner_id, title, description, category, expense_date, amount_paise,
                approved_amount_paise, status, created_at, updated_at, version,
-               idempotency_key, creation_payload
-           ) VALUES (?, ?, ?, ?, ?, ?, NULL, 'DRAFT', ?, ?, 1, ?, ?)""",
+               idempotency_key, creation_payload, merchant
+           ) VALUES (?, ?, ?, ?, ?, ?, NULL, 'DRAFT', ?, ?, 1, ?, ?, ?)""",
         (owner_id, values["title"], values["description"], values["category"],
-         values["expense_date"], values["amount_paise"], now, now, key, canonical),
+         values["expense_date"], values["amount_paise"], now, now, key, canonical, values["merchant"]),
     )
     return cursor.lastrowid
 
@@ -58,11 +61,11 @@ def edit_claim(connection: sqlite3.Connection, claim_id: int, version: int,
                values: dict[str, Any], next_status: str, now: str) -> int:
     return connection.execute(
         """UPDATE claims SET title = ?, description = ?, category = ?, expense_date = ?,
-               amount_paise = ?, approved_amount_paise = NULL, status = ?,
+               amount_paise = ?, merchant = ?, approved_amount_paise = NULL, status = ?,
                updated_at = ?, version = version + 1
            WHERE id = ? AND version = ?""",
         (values["title"], values["description"], values["category"], values["expense_date"],
-         values["amount_paise"], next_status, now, claim_id, version),
+         values["amount_paise"], values["merchant"], next_status, now, claim_id, version),
     ).rowcount
 
 
@@ -106,8 +109,8 @@ def append_event(
         """INSERT INTO claim_events (
                claim_id, owner_id, actor_id, action, title, description, category,
                expense_date, amount_paise, approved_amount_paise, status, version,
-               comment, event_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               comment, event_at, merchant, receipt_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             claim["id"],
             claim["owner_id"],
@@ -123,21 +126,42 @@ def append_event(
             claim["version"],
             comment,
             event_at,
+            claim["merchant"],
+            claim["current_receipt_id"],
         ),
     )
 
 
 def fetch_events(connection: sqlite3.Connection, claim_id: int) -> list[sqlite3.Row]:
     rows = connection.execute(
-        """SELECT e.id, e.action, e.owner_id, owner.name AS owner_name,
+        f"""SELECT e.id, e.action, e.owner_id, owner.name AS owner_name,
                   e.actor_id, actor.name AS actor_name, actor.role AS actor_role,
                   e.title, e.description, e.category, e.expense_date,
                   e.amount_paise, e.approved_amount_paise, e.status, e.version,
-                  e.comment, e.event_at
+                  e.comment, e.event_at, e.merchant, {RECEIPT_FIELDS}
            FROM claim_events e
            JOIN users actor ON actor.id = e.actor_id
            JOIN users owner ON owner.id = e.owner_id
+           LEFT JOIN claim_receipts r ON r.id = e.receipt_id AND r.claim_id = e.claim_id
            WHERE e.claim_id = ? ORDER BY e.id""",
         (claim_id,),
     ).fetchall()
     return rows
+
+
+def insert_receipt(connection, claim_id, uploader_id, filename, content_type, content, sha256, now):
+    return connection.execute(
+        "INSERT INTO claim_receipts (claim_id, uploader_id, filename, content_type, size, sha256, created_at, content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (claim_id, uploader_id, filename, content_type, len(content), sha256, now, content),
+    ).lastrowid
+
+
+def update_receipt(connection, claim_id, version, receipt_id, now):
+    return connection.execute(
+        "UPDATE claims SET current_receipt_id = ?, status = 'DRAFT', approved_amount_paise = NULL, updated_at = ?, version = version + 1 WHERE id = ? AND version = ?",
+        (receipt_id, now, claim_id, version),
+    ).rowcount
+
+
+def fetch_receipt_content(connection, claim_id, receipt_id):
+    return connection.execute("SELECT filename, content_type, content FROM claim_receipts WHERE claim_id = ? AND id = ?", (claim_id, receipt_id)).fetchone()

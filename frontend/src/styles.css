@@ -260,3 +260,11 @@ h1, h2, h3, p { margin-top: 0; }
   .amount-summary > div:last-child:not(:first-child) { border-top: 1px solid #e8ebed; }
   .timeline-heading { flex-direction: column; gap: 3px; }
 }
+.receipt-panel { border-top: 1px solid #e3e6e8; padding: 20px 0; min-width: 0; }
+.receipt-panel h3 { margin: 0 0 12px; }
+.receipt-panel p { overflow-wrap: anywhere; }
+.receipt-current img { display: block; max-width: 100%; max-height: 180px; object-fit: contain; margin: 10px 0; }
+.receipt-upload { margin-top: 16px; }
+.receipt-upload label { display: block; font-weight: 600; }
+.receipt-upload input { display: block; max-width: 100%; margin-top: 8px; }
+.receipt-panel button { min-height: 44px; }

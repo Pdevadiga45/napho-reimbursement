@@ -62,6 +62,13 @@ CREATE TABLE IF NOT EXISTS claim_events (
 CREATE INDEX IF NOT EXISTS idx_claims_owner_created ON claims(owner_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_claims_status_created ON claims(status, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_events_claim ON claim_events(claim_id, id);
+CREATE TABLE IF NOT EXISTS claim_receipts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    claim_id INTEGER NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+    uploader_id INTEGER NOT NULL REFERENCES users(id),
+    filename TEXT NOT NULL, content_type TEXT NOT NULL, size INTEGER NOT NULL,
+    sha256 TEXT NOT NULL, created_at TEXT NOT NULL, content BLOB NOT NULL
+);
 """
 
 
@@ -103,6 +110,15 @@ class Database:
         connection = self.connect()
         try:
             connection.executescript(SCHEMA)
+            with self.transaction() as migration:
+                for table, columns in {
+                    "claims": (("merchant", "TEXT NOT NULL DEFAULT ''"), ("current_receipt_id", "INTEGER REFERENCES claim_receipts(id)")),
+                    "claim_events": (("merchant", "TEXT NOT NULL DEFAULT ''"), ("receipt_id", "INTEGER REFERENCES claim_receipts(id)")),
+                }.items():
+                    existing = {row["name"] for row in migration.execute(f"PRAGMA table_info({table})")}
+                    for name, definition in columns:
+                        if name not in existing:
+                            migration.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
             connection.executemany(
                 "INSERT OR IGNORE INTO users (id, name, role) VALUES (?, ?, ?)",
                 SEED_USERS,
