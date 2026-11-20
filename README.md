@@ -1,6 +1,6 @@
 # Napho Reimbursement Management
 
-A React and Python application for creating, reviewing and tracking expense claims, including partial approval.
+A React and Python application for creating, reviewing and tracking expense claims.
 
 ## Setup
 
@@ -77,4 +77,4 @@ API tests cover lifecycle transitions, ownership, amounts, history, duplicate re
 - Claim lists show ten records per page, with status filters applied on the server.
 - SQLite permits one writer at a time. Concurrent writes are handled safely, but contention can return a retryable conflict. High-concurrency performance has not been load-tested.
 
-OpenAI Codex was used to assist with implementation, tests and code review.
+OpenAI Codex was used to assist with implementation and unit tests.
