@@ -1,6 +1,6 @@
 # Napho Reimbursement Management
 
-A React and Python application for creating, reviewing and tracking expense claims, including partial approval.
+A React and Python application for creating, reviewing and tracking expense claims.
 
 ## Setup
 
