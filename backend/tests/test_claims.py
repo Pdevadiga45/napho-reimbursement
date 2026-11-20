@@ -78,8 +78,22 @@ def test_session_logout_tamper_validation_and_header_spoof(application, client, 
     assert cookie
     assert client.get("/api/auth/me").json()["role"] == "EMPLOYEE"
     assert approver.get("/api/auth/me").json()["role"] == "APPROVER"
+    assert client.get("/api/claims", headers={"X-Expected-User-Id": "1"}).status_code == 200
+    for actor in ("3", "invalid", "", "01"):
+        assert client.get("/api/claims", headers={"X-Expected-User-Id": actor}).status_code == 401
+        response = client.post("/api/claims", headers={"X-Expected-User-Id": actor, "Idempotency-Key": str(uuid4())}, json=claim_payload())
+        assert response.status_code == 401
+    assert client.get("/api/claims").json() == []
+    with TestClient(application) as anonymous:
+        assert anonymous.get("/api/claims", headers={"X-Expected-User-Id": "1"}).status_code == 401
     claim = create_claim(client).json()
     assert submit_claim(client, claim["id"], attach_receipt(client, claim["id"], 1)).status_code == 200
+    before = client.get(f"/api/claims/{claim['id']}").json()
+    mismatch = {"X-Expected-User-Id": "3"}
+    assert client.patch(f"/api/claims/{claim['id']}", headers=mismatch, json={**claim_payload(), "version": 3}).status_code == 401
+    assert client.post(f"/api/claims/{claim['id']}/receipt?version=3&filename=bill.png", headers=mismatch, content=b"receipt").status_code == 401
+    assert client.get(f"/api/claims/{claim['id']}", headers=mismatch).status_code == 401
+    assert client.get(f"/api/claims/{claim['id']}").json() == before
     assert client.post(f"/api/claims/{claim['id']}/review", headers=headers(3), json={"version": 3, "decision": "APPROVED", "approved_amount_paise": 12500}).status_code == 403
     with TestClient(application) as anonymous:
         anonymous.cookies.set("napho_session", cookie + "tampered")

@@ -26,6 +26,7 @@ from policy import allowed_actions, can_view, permissions_for
 
 MAX_AMOUNT_PAISE = 10_000_000_000
 MAX_PAGE = 1_000_000
+MAX_RESOURCE_ID = 2**63 - 1
 ClaimStatus = Literal["DRAFT", "SUBMITTED", "APPROVED", "REJECTED", "PAID"]
 CATEGORIES = {"travel and stay", "meals", "work & tech", "others"}
 MOCK_SESSION_SECRET = "napho-mock-development-only-session-secret"
@@ -197,6 +198,9 @@ def current_user(request: Request) -> dict[str, Any]:
         row = store.fetch_user(connection, user_id)
         if row is None or (row["name"], row["role"]) != (expected[2], expected[3]):
             raise HTTPException(status_code=401, detail="Authentication required")
+        expected_actor = request.headers.get("X-Expected-User-Id")
+        if expected_actor is not None and expected_actor != str(row["id"]):
+            raise HTTPException(status_code=401, detail="Authentication required")
         return {**dict(row), "permissions": permissions_for(row["role"])}
     finally:
         connection.close()
@@ -315,7 +319,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @application.get("/api/claims/{claim_id}")
     def get_claim(
         request: Request,
-        claim_id: int = PathParam(gt=0),
+        claim_id: int = PathParam(gt=0, le=MAX_RESOURCE_ID),
         user: dict[str, Any] = Depends(current_user),
     ) -> dict[str, Any]:
         connection = request.app.state.database.connect()
@@ -338,7 +342,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     def edit_claim(
         body: ClaimUpdate,
         request: Request,
-        claim_id: int = PathParam(gt=0),
+        claim_id: int = PathParam(gt=0, le=MAX_RESOURCE_ID),
         user: dict[str, Any] = Depends(current_user),
     ) -> dict[str, Any]:
         require_permission(user, "create_claims")
@@ -366,7 +370,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @application.delete("/api/claims/{claim_id}", status_code=204)
     def delete_claim(
         request: Request,
-        claim_id: int = PathParam(gt=0),
+        claim_id: int = PathParam(gt=0, le=MAX_RESOURCE_ID),
         version: int = Query(gt=0),
         user: dict[str, Any] = Depends(current_user),
     ) -> Response:
@@ -389,7 +393,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     def submit_claim(
         body: VersionBody,
         request: Request,
-        claim_id: int = PathParam(gt=0),
+        claim_id: int = PathParam(gt=0, le=MAX_RESOURCE_ID),
         user: dict[str, Any] = Depends(current_user),
     ) -> dict[str, Any]:
         require_permission(user, "create_claims")
@@ -417,7 +421,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     def review_claim(
         body: ReviewBody,
         request: Request,
-        claim_id: int = PathParam(gt=0),
+        claim_id: int = PathParam(gt=0, le=MAX_RESOURCE_ID),
         user: dict[str, Any] = Depends(current_user),
     ) -> dict[str, Any]:
         require_permission(user, "review_claims")
@@ -464,7 +468,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     def pay_claim(
         body: VersionBody,
         request: Request,
-        claim_id: int = PathParam(gt=0),
+        claim_id: int = PathParam(gt=0, le=MAX_RESOURCE_ID),
         user: dict[str, Any] = Depends(current_user),
     ) -> dict[str, Any]:
         require_permission(user, "mark_paid")
@@ -499,7 +503,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return row
 
     @application.post("/api/claims/{claim_id}/receipt")
-    async def upload_receipt(request: Request, claim_id: int = PathParam(gt=0), version: int = Query(gt=0),
+    async def upload_receipt(request: Request, claim_id: int = PathParam(gt=0, le=MAX_RESOURCE_ID), version: int = Query(gt=0),
                              filename: str = Query(), user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         require_permission(user, "create_claims")
         database = request.app.state.database
@@ -540,7 +544,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             return claim_response(row, user)
 
     @application.delete("/api/claims/{claim_id}/receipt")
-    def remove_receipt(request: Request, claim_id: int = PathParam(gt=0), version: int = Query(gt=0),
+    def remove_receipt(request: Request, claim_id: int = PathParam(gt=0, le=MAX_RESOURCE_ID), version: int = Query(gt=0),
                        user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         require_permission(user, "create_claims")
         with write_transaction(request.app.state.database) as connection:
@@ -555,7 +559,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             return claim_response(row, user)
 
     @application.get("/api/claims/{claim_id}/receipts/{receipt_id}")
-    def download_receipt(request: Request, claim_id: int = PathParam(gt=0), receipt_id: int = PathParam(gt=0),
+    def download_receipt(request: Request, claim_id: int = PathParam(gt=0, le=MAX_RESOURCE_ID), receipt_id: int = PathParam(gt=0, le=MAX_RESOURCE_ID),
                          user: dict[str, Any] = Depends(current_user)) -> Response:
         connection = request.app.state.database.connect()
         try:

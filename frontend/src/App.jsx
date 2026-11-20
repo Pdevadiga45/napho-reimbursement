@@ -83,6 +83,7 @@ function apiErrorMessage(payload) {
 async function api(path, userId, options = {}) {
   const { isCurrent, collection, ...requestOptions } = options;
   const headers = new Headers(requestOptions.headers || {});
+  if (userId != null) headers.set('X-Expected-User-Id', String(userId));
   if (requestOptions.body !== undefined && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   const response = await fetch(path, { ...requestOptions, headers, credentials: 'same-origin' });
   if (response.status === 204) return null;
@@ -174,7 +175,7 @@ function ClaimForm({ values, onChange, onSubmit, onCancel, submitLabel, error, b
       </div>
       <label>
         Category
-        <select name="category" value={values.category} onChange={update('category')} required>
+        <select name="category" value={values.category} onChange={update('category')} disabled={busy} required>
           <option value="">Choose a category</option>
           {Object.entries(CATEGORIES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
@@ -183,11 +184,11 @@ function ClaimForm({ values, onChange, onSubmit, onCancel, submitLabel, error, b
       <ReceiptPicker file={file} onFile={onFile} busy={busy} inputRef={inputRef} />
       <label>
         Claim title
-        <input maxLength="120" name="title" value={values.title} onChange={update('title')} required />
+        <input maxLength="120" name="title" value={values.title} onChange={update('title')} disabled={busy} required />
       </label>
       <label>
         Expense date and time
-        <input type="datetime-local" step="60" name="expense_date" value={values.expense_date} onChange={update('expense_date')} required />
+        <input type="datetime-local" step="60" name="expense_date" value={values.expense_date} onChange={update('expense_date')} disabled={busy} required />
         {values.originalDate && <span className="label-help">Original date: {values.originalDate}; time was not recorded. Enter a time.</span>}
       </label>
       <label>
@@ -199,16 +200,17 @@ function ClaimForm({ values, onChange, onSubmit, onCancel, submitLabel, error, b
           placeholder="0.00"
           value={values.amount}
           onChange={update('amount')}
+          disabled={busy}
           required
         />
       </label>
       <label>
         Merchant <span className="label-help">(optional)</span>
-        <input maxLength="120" name="merchant" value={values.merchant} onChange={update('merchant')} />
+        <input maxLength="120" name="merchant" value={values.merchant} onChange={update('merchant')} disabled={busy} />
       </label>
       <label>
         Business purpose / expense details
-        <textarea maxLength="2000" name="description" rows="3" value={values.description} onChange={update('description')} required />
+        <textarea maxLength="2000" name="description" rows="3" value={values.description} onChange={update('description')} disabled={busy} required />
       </label>
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="form-actions">
@@ -958,6 +960,7 @@ export default function App() {
           <section className="detail-card" aria-labelledby="detail-heading">
             {formMode && formValues ? (
               <ClaimForm
+                key={formGeneration.current}
                 values={formValues}
                 onChange={setFormValues}
                 onSubmit={saveClaim}

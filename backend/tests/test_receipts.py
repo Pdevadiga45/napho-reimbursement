@@ -56,6 +56,25 @@ def test_merchant_legacy_replay_edit_and_reopen(application, client):
 def test_privacy_stale_validation_and_state(application, client, approver):
     claim = create_claim(client).json()
     cid = claim['id']
+    maximum = 2**63 - 1
+    with TestClient(application, raise_server_exceptions=False) as checked:
+        checked.cookies.set('napho_session', client.cookies.get('napho_session'))
+        assert checked.get(f'/api/claims/{maximum}').status_code == 404
+        assert checked.get(f'/api/claims/{cid}/receipts/{maximum}').status_code == 404
+        for value in (0, -1, maximum + 1):
+            for method, path, kwargs in (
+                ('get', f'/api/claims/{value}', {}),
+                ('patch', f'/api/claims/{value}', {'json': {**claim_payload(), 'version': 1}}),
+                ('delete', f'/api/claims/{value}?version=1', {}),
+                ('post', f'/api/claims/{value}/submit', {'json': {'version': 1}}),
+                ('post', f'/api/claims/{value}/review', {'json': {'version': 1, 'decision': 'APPROVED', 'approved_amount_paise': 1}}),
+                ('post', f'/api/claims/{value}/pay', {'json': {'version': 1}}),
+                ('post', f'/api/claims/{value}/receipt?version=1&filename=bill.png', {'content': PNG}),
+                ('delete', f'/api/claims/{value}/receipt?version=1', {}),
+                ('get', f'/api/claims/{value}/receipts/1', {}),
+                ('get', f'/api/claims/{cid}/receipts/{value}', {}),
+            ):
+                assert getattr(checked, method)(path, **kwargs).status_code == 422, (method, path)
     initial_upload = upload(client, cid, 1)
     assert initial_upload.status_code == 200
     attached = initial_upload.json()

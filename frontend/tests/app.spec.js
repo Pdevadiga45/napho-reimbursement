@@ -91,6 +91,82 @@ async function switchUser(page, username) {
   }
 }
 
+test('saving locks the captured claim fields until the committed response', async ({ page }) => {
+  await page.goto('/');
+  await signIn(page, 'employee');
+  await page.getByRole('button', { name: 'New claim' }).click();
+  const title = `Busy snapshot ${randomUUID()}`;
+  await page.getByLabel('Category').selectOption('meals');
+  await page.getByLabel('Claim title').fill(title);
+  await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+  await page.getByLabel('Requested amount (₹)').fill('100');
+  await page.getByLabel('Merchant').fill('Shop');
+  await page.getByLabel('Business purpose / expense details').fill('Snapshot');
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let committed;
+  const responseReady = new Promise(resolve => { committed = resolve; });
+  let finishRoute;
+  const routeFinished = new Promise(resolve => { finishRoute = resolve; });
+  let created;
+  await page.route('**/api/claims', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const response = await route.fetch();
+    created = await response.json();
+    committed(response.status());
+    await gate;
+    await route.fulfill({ response });
+    finishRoute();
+  });
+  try {
+    await page.getByRole('button', { name: 'Save as draft' }).click();
+    expect(await responseReady).toBe(201);
+    await expect(page.getByRole('button', { name: 'Saving…' })).toBeVisible();
+    for (const label of ['Category', 'Claim title', 'Expense date and time', 'Requested amount (₹)', 'Merchant', 'Business purpose / expense details']) {
+      await expect(page.getByLabel(label)).toBeDisabled();
+    }
+    release();
+    await expect(page.getByText('Claim saved')).toBeVisible();
+    const claims = await (await page.request.get('/api/claims')).json();
+    expect(claims.find(claim => claim.title === title).amount_paise).toBe(10000);
+  } finally {
+    release();
+    if (created) {
+      await routeFinished;
+      await page.request.delete(`/api/claims/${created.id}?version=${created.version}`);
+    }
+  }
+});
+
+test('stale tabs cannot create claims after the shared account changes', async ({ page, context }) => {
+  for (const [initial, next] of [['employee', 'manager'], ['manager', 'employee']]) {
+    await page.goto('/');
+    if (await page.getByRole('heading', { name: 'Sign in' }).isVisible()) await signIn(page, initial);
+    else await switchUser(page, initial);
+    if (initial === 'manager') await page.getByRole('navigation', { name: 'Workspaces' }).getByRole('button', { name: 'My claims' }).click();
+    await page.getByRole('button', { name: 'New claim' }).click();
+    const title = `Stale actor ${randomUUID()}`;
+    await page.getByLabel('Category').selectOption('meals');
+    await page.getByLabel('Claim title').fill(title);
+    await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+    await page.getByLabel('Requested amount (₹)').fill('100');
+    await page.getByLabel('Business purpose / expense details').fill('Stale actor');
+    const other = await context.newPage();
+    try {
+      await other.goto('/');
+      await switchUser(other, next);
+      const response = page.waitForResponse(response => response.url().endsWith('/api/claims') && response.request().method() === 'POST');
+      await page.getByRole('button', { name: 'Save as draft' }).click();
+      expect((await response).status()).toBe(401);
+      await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+      await expect(other.getByRole('banner').getByText(next === 'manager' ? 'Manager One' : 'Employee One')).toBeVisible();
+      expect((await (await other.request.get('/api/claims')).json()).some(claim => claim.title === title)).toBe(false);
+    } finally {
+      await other.close();
+    }
+  }
+});
+
 test('pending logout prevents draft creation', async ({ page }) => {
   await page.goto('/');
   await signIn(page, 'employee');
@@ -982,6 +1058,16 @@ test('upfront receipt submission validates before mutation and retries upload', 
   await page.goto('/');
   await signIn(page, 'employee');
   await page.getByRole('button', { name: 'New claim' }).click();
+  await page.getByLabel('Choose receipt').setInputFiles({ name: 'bill.png', mimeType: 'image/png', buffer: receiptPng });
+  await page.getByRole('button', { name: 'New claim' }).click();
+  await expect(page.getByLabel('Choose receipt')).toHaveValue('');
+  expect(await page.getByLabel('Choose receipt').evaluate(input => input.files.length)).toBe(0);
+  await expect(page.getByRole('button', { name: 'Clear selected receipt' })).toHaveCount(0);
+  await page.getByLabel('Choose receipt').setInputFiles({ name: 'bad.txt', mimeType: 'text/plain', buffer: Buffer.from('bad') });
+  await expect(page.getByText(/Choose a PNG/)).toBeVisible();
+  await page.getByRole('button', { name: 'New claim' }).click();
+  await expect(page.getByText(/Choose a PNG/)).toHaveCount(0);
+  await expect(page.getByLabel('Choose receipt')).toHaveValue('');
   await expect(page.getByLabel('Category')).toHaveJSProperty('tagName', 'SELECT');
   await expect(page.getByLabel('Category').locator('option')).toHaveText(['Choose a category', 'Travel and Stay', 'Meals', 'Work & Tech', 'Others']);
   expect(await page.getByLabel('Category').locator('option').evaluateAll((options) => options.map((option) => option.value))).toEqual(['', 'travel and stay', 'meals', 'work & tech', 'others']);
