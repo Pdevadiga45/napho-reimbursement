@@ -15,6 +15,8 @@ test('workspace chrome keeps navigation and actions in context', async ({ page }
   await expect(page.locator('.list-card')).toBeVisible();
   await expect(page.locator('.detail-card')).toBeVisible();
   await expect(nav.getByRole('button', { name: 'Approvals' })).toHaveCount(0);
+  await expect(page.getByText(/Employee view|Approver view/)).toHaveCount(0);
+  expect((await page.request.get('/api/approvals')).status()).toBe(403);
   await expect(page.getByRole('button', { name: 'New claim' })).toBeVisible();
   await switchUser(page, 'manager');
   await expect(nav.getByRole('button', { name: 'Approvals' })).toHaveAttribute('aria-current', 'page');
@@ -50,25 +52,6 @@ for (const width of [320, 390]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
   });
 }
-
-test('employee starts in My claims without approvals or view badges', async ({ page }) => {
-  await page.goto('/');
-  await page.getByLabel('Username').fill('employee');
-  await page.getByLabel('Password').fill('employee123');
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('navigation', { name: 'Workspaces' }).getByRole('button', { name: 'My claims' })).toHaveAttribute('aria-current', 'page');
-  await expect(page.getByRole('button', { name: 'Approvals' })).toHaveCount(0);
-  await expect(page.getByText(/Employee view|Approver view/)).toHaveCount(0);
-  expect((await page.request.get('/api/approvals')).status()).toBe(403);
-});
-
-test('unauthenticated visitors see sign in', async ({ page }) => {
-  await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
-  await expect(page.getByLabel('Username')).toBeVisible();
-  await expect(page.getByLabel('Password')).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'My claims' })).toHaveCount(0);
-});
 
 async function signIn(page, username) {
   await page.getByLabel('Username').fill(username);
@@ -138,6 +121,10 @@ test('pending logout prevents draft creation', async ({ page }) => {
 test('sign in, restore, log out and expire a session', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  await expect(page.getByLabel('Username')).toBeVisible();
+  await expect(page.getByLabel('Password')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'My claims' })).toHaveCount(0);
   await page.getByLabel('Username').fill('employee');
   await page.getByLabel('Password').fill('wrong');
   await page.getByRole('button', { name: 'Sign in' }).click();
@@ -194,6 +181,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   const expenseDate = new Date().toISOString().slice(0, 10);
   await page.goto('/');
   await signIn(page, 'employee');
+  await expect(page.getByText('Amounts are shown in Indian rupees (INR).', { exact: true })).toHaveCount(0);
   await expect(page.getByText('No claims yet')).toBeVisible();
   await expect(page.getByRole('button', { name: 'New claim' })).toBeVisible();
 
@@ -254,6 +242,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await expect(page.getByText('Partial approval · ₹6,500.00 approved of ₹8,000.00 requested.')).toBeVisible();
   await expect(page.getByText('₹1,500.00', { exact: true })).toBeVisible();
   await expect(page.getByText('Taxi cap policy')).toBeVisible();
+  await expect(page.locator('.event-actor')).toHaveText(['Employee One', 'Employee One', 'Manager One']);
   await page.getByRole('button', { name: 'Mark as paid' }).click();
   await expect(page.locator('.claim-detail .status-chip.status-paid')).toBeVisible();
   await expect(page.getByText('Marked as paid', { exact: true })).toBeVisible();
@@ -456,38 +445,6 @@ test('rapid workspace changes discard delayed real collection responses', async 
   }
   await expect(page.getByRole('button', { name: otherTitle })).toBeVisible();
   await expect(page.getByRole('heading', { name: ownTitle })).toHaveCount(0);
-});
-
-test('history shows account names without roles and My claims has no currency footnote', async ({ page }) => {
-  await page.goto('/');
-  const baseURL = new URL(page.url()).origin;
-  const employeeApi = await request.newContext({ baseURL });
-  const managerApi = await request.newContext({ baseURL });
-  try {
-    for (const [context, username, password] of [
-      [employeeApi, 'employee', 'employee123'],
-      [managerApi, 'manager', 'manager123'],
-    ]) {
-      const login = await context.post('/api/auth/login', { data: { username, password } });
-      expect(login.ok()).toBeTruthy();
-    }
-    const created = await employeeApi.post('/api/claims', {
-      headers: { 'Idempotency-Key': randomUUID() },
-      data: { title: 'Naming regression', description: 'History names', category: 'Travel', expense_date: new Date().toISOString().slice(0, 10), amount_paise: 12500 },
-    });
-    expect(created.status()).toBe(201);
-    const claim = await created.json();
-    expect((await employeeApi.post(`/api/claims/${claim.id}/submit`, { data: { version: claim.version } })).ok()).toBeTruthy();
-    expect((await managerApi.post(`/api/claims/${claim.id}/review`, { data: { version: 2, decision: 'APPROVED', approved_amount_paise: 12500 } })).ok()).toBeTruthy();
-
-    await signIn(page, 'employee');
-    await page.getByRole('button', { name: 'Naming regression' }).click();
-    await expect(page.locator('.event-actor')).toHaveText(['Employee One', 'Employee One', 'Manager One']);
-    await expect(page.getByText('Amounts are shown in Indian rupees (INR).', { exact: true })).toHaveCount(0);
-  } finally {
-    await employeeApi.dispose();
-    await managerApi.dispose();
-  }
 });
 
 for (const state of ['first submission', 'direct rejected resubmission', 'corrected draft resubmission']) {

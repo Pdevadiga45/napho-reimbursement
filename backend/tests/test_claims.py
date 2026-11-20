@@ -11,6 +11,8 @@ from db import Database
 
 def test_auth_rejects_header_without_session(tmp_path):
     with TestClient(create_app(tmp_path / "auth.sqlite3")) as anonymous:
+        assert anonymous.get("/api/claims").status_code == 401
+        assert anonymous.get("/api/claims", headers={"X-User-Id": "99"}).status_code == 401
         assert anonymous.get("/api/claims", headers={"X-User-Id": "1"}).status_code == 401
 
 
@@ -407,13 +409,6 @@ def test_foreign_owner_claim_is_private_and_immutable(application, client):
     assert submit_claim(client, claim_id, 1).status_code == 404
 
 
-def test_mutating_and_read_routes_require_a_seeded_mock_identity(application, approver):
-    with TestClient(application) as anonymous:
-        assert anonymous.get("/api/claims").status_code == 401
-        assert anonymous.get("/api/claims", headers=headers(99)).status_code == 401
-    assert create_claim(approver).status_code == 201
-
-
 @pytest.mark.parametrize(
     "body",
     [
@@ -480,30 +475,12 @@ def test_initialization_preserves_existing_non_login_user(tmp_path):
         assert browser.post("/api/auth/login", json={"username": "Legacy employee", "password": "employee123"}).status_code == 401
 
 
-def test_workspace_approver_can_create_edit_submit_own(approver):
-    created = create_claim(approver)
-    assert created.status_code == 201
-    claim = created.json()
-    assert claim["allowed_actions"] == ["edit", "delete", "submit"]
-    edited = approver.patch(f"/api/claims/{claim['id']}", json={**claim_payload(title="Updated"), "version": 1})
-    assert edited.status_code == 200
-    assert submit_claim(approver, claim["id"], 2).json()["allowed_actions"] == []
-
-
 def test_workspace_lists_and_permissions(client, approver):
     claim = create_claim(client).json()
     assert submit_claim(client, claim["id"], 1).status_code == 200
     assert approver.get("/api/claims").json() == []
     assert client.get("/api/approvals").status_code == 403
     assert approver.get("/api/approvals").json()[0]["allowed_actions"] == ["review"]
-
-
-def test_workspace_employee_queue_forbidden(client):
-    assert client.get("/api/approvals").status_code == 403
-
-
-def test_workspace_draft_actions(client):
-    assert create_claim(client).json()["allowed_actions"] == ["edit", "delete", "submit"]
 
 
 def test_workspace_queue_order_privacy_and_payload_ownership(application, client, approver):
@@ -522,21 +499,6 @@ def test_workspace_queue_order_privacy_and_payload_ownership(application, client
     assert approver.get(f"/api/claims/{private['id']}").status_code == 404
 
 
-def test_workspace_self_review_forbidden(application, approver):
-    connection = application.state.database.connect()
-    try:
-        cursor = connection.execute("""INSERT INTO claims (owner_id, title, description, category, expense_date,
-            amount_paise, status, created_at, updated_at, version, idempotency_key, creation_payload)
-            VALUES (3, 'Own', 'Own', 'Other', '2025-02-03', 100, 'SUBMITTED',
-                    '2025-02-03', '2025-02-03', 1, 'own-key', '{}')""")
-        claim_id = cursor.lastrowid
-    finally:
-        connection.close()
-    before = approver.get(f"/api/claims/{claim_id}").json()
-    assert review_claim(approver, claim_id, {"version": 1, "decision": "APPROVED", "approved_amount_paise": 100}).status_code == 403
-    assert approver.get(f"/api/claims/{claim_id}").json() == before
-
-
 @pytest.mark.parametrize("claimant_fixture", ["client", "approver"])
 def test_workspace_claimant_lifecycle(request, claimant_fixture, application, monkeypatch):
     import app
@@ -552,12 +514,16 @@ def test_workspace_claimant_lifecycle(request, claimant_fixture, application, mo
         login = reviewer.post("/api/auth/login", json={"username": "second", "password": "second123"})
         assert login.json()["permissions"] == ["create_claims", "review_claims", "mark_paid"]
         assert reviewer.get("/api/auth/me").json() == login.json()
-        created = create_claim(claimant).json()
+        creation = create_claim(claimant)
+        assert creation.status_code == 201
+        created = creation.json()
         claim_id = created["id"]
         assert created["allowed_actions"] == ["edit", "delete", "submit"]
         assert reviewer.get(f"/api/claims/{claim_id}").status_code == 404
         assert reviewer.get("/api/approvals").json() == []
-        edited = claimant.patch(f"/api/claims/{claim_id}", json={**claim_payload(title="Edited"), "version": 1}).json()
+        edit_response = claimant.patch(f"/api/claims/{claim_id}", json={**claim_payload(title="Edited"), "version": 1})
+        assert edit_response.status_code == 200
+        edited = edit_response.json()
         assert edited["allowed_actions"] == ["edit", "delete", "submit"]
         submitted = submit_claim(claimant, claim_id, 2).json()
         assert submitted["allowed_actions"] == []

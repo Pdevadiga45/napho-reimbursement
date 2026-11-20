@@ -21,14 +21,6 @@ PNG = base64.b64decode(
 )
 
 
-def test_upload_receipt_and_read_original(client):
-    claim = create_claim(client).json()
-    response = client.post(f"/api/claims/{claim['id']}/receipt?version=1&filename=bill.png", content=PNG)
-    assert response.status_code == 200
-    receipt = response.json()['receipt']
-    assert client.get(f"/api/claims/{claim['id']}/receipts/{receipt['id']}").content == PNG
-
-
 def upload(client, claim_id, version, filename="bill.png", content=PNG, **kwargs):
     return client.post(f"/api/claims/{claim_id}/receipt", params={"version": version, "filename": filename}, content=content, **kwargs)
 
@@ -64,8 +56,11 @@ def test_merchant_legacy_replay_edit_and_reopen(application, client):
 def test_privacy_stale_validation_and_state(application, client, approver):
     claim = create_claim(client).json()
     cid = claim['id']
-    attached = upload(client, cid, 1).json()
+    initial_upload = upload(client, cid, 1)
+    assert initial_upload.status_code == 200
+    attached = initial_upload.json()
     rid = attached['receipt']['id']
+    assert client.get(f'/api/claims/{cid}/receipts/{rid}').content == PNG
     other = create_claim(client).json()['id']
     with TestClient(application) as anonymous:
         assert anonymous.get(f'/api/claims/{cid}/receipts/{rid}').status_code == 401
