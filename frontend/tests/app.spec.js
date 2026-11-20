@@ -2,6 +2,23 @@ import { test, expect, request } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { formatRupees, parseRupees } from '../src/money.js';
 
+test('category and expense time controls enforce current contract', async ({ page }) => {
+  await page.goto('/');
+  await signIn(page, 'employee');
+  await page.getByRole('button', { name: 'New claim' }).click();
+  await expect(page.getByLabel('Category')).toHaveJSProperty('tagName', 'SELECT');
+  await expect(page.getByLabel('Category').locator('option')).toHaveText(['Choose a category', 'Travel and Stay', 'Meals', 'Work & Tech', 'Others']);
+  expect(await page.getByLabel('Category').locator('option').evaluateAll((options) => options.map((option) => option.value))).toEqual(['', 'travel and stay', 'meals', 'work & tech', 'others']);
+});
+
+test('expense time control is required', async ({ page }) => {
+  await page.goto('/');
+  await signIn(page, 'employee');
+  await page.getByRole('button', { name: 'New claim' }).click();
+  await expect(page.getByLabel('Expense date and time')).toHaveAttribute('type', 'datetime-local');
+  await expect(page.getByLabel('Expense date and time')).toHaveAttribute('required', '');
+});
+
 test('workspace chrome keeps navigation and actions in context', async ({ page }) => {
   await page.goto('/');
   await signIn(page, 'employee');
@@ -66,6 +83,18 @@ async function submitClaim(page) {
   await modal.getByRole('button', { name: /^(Submit|Resubmit) claim$/ }).click();
 }
 
+const receiptPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aKsAAAAASUVORK5CYII=', 'base64');
+async function attachReceipt(page) {
+  await page.getByLabel('Choose receipt').setInputFiles({ name: 'bill.png', mimeType: 'image/png', buffer: receiptPng });
+  await page.getByRole('button', { name: 'Attach receipt' }).click();
+  await expect(page.getByRole('img', { name: 'Receipt preview' })).toBeVisible();
+}
+async function attachApiReceipt(context, claim) {
+  const result = await context.post(`/api/claims/${claim.id}/receipt?version=${claim.version}&filename=bill.png`, { headers: { 'Content-Type': 'image/png' }, data: receiptPng });
+  expect(result.ok()).toBeTruthy();
+  return result.json();
+}
+
 async function switchUser(page, username) {
   await page.getByRole('button', { name: 'Log out' }).click();
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
@@ -84,8 +113,8 @@ test('pending logout prevents draft creation', async ({ page }) => {
   await expect(page.getByText('No claims yet')).toBeVisible();
   await page.getByRole('button', { name: 'New claim' }).click();
   await page.getByLabel('Claim title').fill('Logout race');
-  await page.getByLabel('Category').fill('Other');
-  await page.getByLabel('Expense date').fill(new Date().toISOString().slice(0, 10));
+  await page.getByLabel('Category').selectOption('others');
+  await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
   await page.getByLabel('Requested amount (₹)').fill('10');
   await page.getByLabel('Business purpose / expense details').fill('Check logout guard');
 
@@ -140,8 +169,8 @@ test('sign in, restore, log out and expire a session', async ({ page }) => {
   expect((await page.request.post('/api/auth/logout')).status()).toBe(204);
   await page.getByRole('button', { name: 'New claim' }).click();
   await page.getByLabel('Claim title').fill('Expired session');
-  await page.getByLabel('Category').fill('Other');
-  await page.getByLabel('Expense date').fill(new Date().toISOString().slice(0, 10));
+  await page.getByLabel('Category').selectOption('others');
+  await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
   await page.getByLabel('Requested amount (₹)').fill('10');
   await page.getByLabel('Business purpose / expense details').fill('Session expiry check');
   await page.getByRole('button', { name: 'Create draft' }).click();
@@ -178,7 +207,7 @@ test.describe('rupee amount parsing', () => {
 });
 
 test('employee and approver claim workflow', async ({ page }) => {
-  const expenseDate = new Date().toISOString().slice(0, 10);
+  const expenseDate = '2020-01-02T10:00';
   await page.goto('/');
   await signIn(page, 'employee');
   await expect(page.getByText('Amounts are shown in Indian rupees (INR).', { exact: true })).toHaveCount(0);
@@ -195,8 +224,8 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.route('**/api/claims', failFirstTwoCreates);
   await page.getByRole('button', { name: 'New claim' }).click();
   await page.getByLabel('Claim title').fill('Office supplies sample');
-  await page.getByLabel('Category').fill('Office');
-  await page.getByLabel('Expense date').fill(expenseDate);
+  await page.getByLabel('Category').selectOption('work & tech');
+  await page.getByLabel('Expense date and time').fill(expenseDate);
   await page.getByLabel('Requested amount (₹)').fill('900');
   await page.getByLabel('Business purpose / expense details').fill('Temporary draft to check edit and delete.');
   await page.getByRole('button', { name: 'Create draft' }).click();
@@ -221,12 +250,13 @@ test('employee and approver claim workflow', async ({ page }) => {
 
   await page.getByRole('button', { name: 'New claim' }).click();
   await page.getByLabel('Claim title').fill('Airport taxi');
-  await page.getByLabel('Category').fill('Travel');
-  await page.getByLabel('Expense date').fill(expenseDate);
+  await page.getByLabel('Category').selectOption('travel and stay');
+  await page.getByLabel('Expense date and time').fill(expenseDate);
   await page.getByLabel('Requested amount (₹)').fill('8000');
   await page.getByLabel('Business purpose / expense details').fill('Airport transfer for a client visit.');
   await page.getByRole('button', { name: 'Create draft' }).click();
   await expect(page.getByRole('heading', { name: 'Airport taxi' })).toBeVisible();
+  await attachReceipt(page);
   await submitClaim(page);
   await expect(page.locator('.claim-detail .status-chip.status-submitted')).toBeVisible();
 
@@ -242,7 +272,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   await expect(page.getByText('Partial approval · ₹6,500.00 approved of ₹8,000.00 requested.')).toBeVisible();
   await expect(page.getByText('₹1,500.00', { exact: true })).toBeVisible();
   await expect(page.getByText('Taxi cap policy')).toBeVisible();
-  await expect(page.locator('.event-actor')).toHaveText(['Employee One', 'Employee One', 'Manager One']);
+  await expect(page.locator('.event-actor')).toHaveText(['Employee One', 'Employee One', 'Employee One', 'Manager One']);
   await page.getByRole('button', { name: 'Mark as paid' }).click();
   await expect(page.locator('.claim-detail .status-chip.status-paid')).toBeVisible();
   await expect(page.getByText('Marked as paid', { exact: true })).toBeVisible();
@@ -253,11 +283,12 @@ test('employee and approver claim workflow', async ({ page }) => {
 
   await page.getByRole('button', { name: 'New claim' }).click();
   await page.getByLabel('Claim title').fill('Hotel correction');
-  await page.getByLabel('Category').fill('Accommodation');
-  await page.getByLabel('Expense date').fill(expenseDate);
+  await page.getByLabel('Category').selectOption('travel and stay');
+  await page.getByLabel('Expense date and time').fill(expenseDate);
   await page.getByLabel('Requested amount (₹)').fill('2000');
   await page.getByLabel('Business purpose / expense details').fill('Hotel stay during a work trip.');
   await page.getByRole('button', { name: 'Create draft' }).click();
+  await attachReceipt(page);
   await submitClaim(page);
   await expect(page.locator('.claim-detail .status-chip.status-submitted')).toBeVisible();
 
@@ -298,8 +329,8 @@ test('employee and approver claim workflow', async ({ page }) => {
   await page.getByRole('button', { name: 'Approve claim' }).click();
   await expect(page.locator('.claim-detail .status-chip.status-approved')).toBeVisible();
   await expect(page.locator('.amount-summary strong').first()).toHaveText('₹1,900.00');
-  await expect(page.locator('.event-expense').filter({ hasText: 'Requested ₹2,000.00' })).toHaveCount(3);
-  await expect(page.locator('.timeline-event time')).toHaveCount(6);
+  await expect(page.locator('.event-expense').filter({ hasText: 'Requested ₹2,000.00' })).toHaveCount(4);
+  await expect(page.locator('.timeline-event time')).toHaveCount(7);
   await expect(page.locator('.timeline-heading strong').filter({ hasText: 'Rejected' })).toHaveCount(1);
   await expect(page.locator('.timeline-heading strong').filter({ hasText: 'Approved' })).toHaveCount(1);
   await expect(page.locator('.event-actor').filter({ hasText: 'Manager One' })).toHaveCount(2);
@@ -311,14 +342,15 @@ test('employee and approver claim workflow', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Review this claim' })).toHaveCount(0);
   await page.getByRole('button', { name: 'New claim' }).click();
   await page.getByLabel('Claim title').fill('Stale review guard');
-  await page.getByLabel('Category').fill('Other');
-  await page.getByLabel('Expense date').fill(expenseDate);
+  await page.getByLabel('Category').selectOption('others');
+  await page.getByLabel('Expense date and time').fill(expenseDate);
   await page.getByLabel('Requested amount (₹)').fill('100');
   await page.getByLabel('Business purpose / expense details').fill('Verify that a stale approval is not replayed.');
   await page.getByRole('button', { name: 'Create draft' }).click();
   await expect(page.getByRole('heading', { name: 'Stale review guard' })).toBeVisible();
   const claimLabel = await page.locator('.claim-detail .eyebrow').textContent();
   const claimId = Number(claimLabel.match(/#(\d+)/)[1]);
+  await attachReceipt(page);
   await submitClaim(page);
 
   await switchUser(page, 'manager');
@@ -339,7 +371,7 @@ test('employee and approver claim workflow', async ({ page }) => {
   const refreshed = await page.request.get(`/api/claims/${claimId}`);
   const refreshedClaim = await refreshed.json();
   expect(refreshedClaim.version).toBe(externallyUpdated.version);
-  expect(refreshedClaim.history).toHaveLength(3);
+  expect(refreshedClaim.history.map((event) => event.action)).toEqual(['CREATED', 'RECEIPT_ATTACHED', 'SUBMITTED', 'APPROVED']);
 });
 
 test('approver owns claims but cannot review their own submission', async ({ page }) => {
@@ -348,13 +380,14 @@ test('approver owns claims but cannot review their own submission', async ({ pag
   await expect(page.getByText('No claims yet')).toBeVisible();
   await page.getByRole('button', { name: 'New claim' }).click();
   await page.getByLabel('Claim title').fill('Approver own expense');
-  await page.getByLabel('Category').fill('Travel');
-  await page.getByLabel('Expense date').fill(new Date().toISOString().slice(0, 10));
+  await page.getByLabel('Category').selectOption('travel and stay');
+  await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
   await page.getByLabel('Requested amount (₹)').fill('100');
   await page.getByLabel('Business purpose / expense details').fill('Own expense');
   await page.getByRole('button', { name: 'Create draft' }).click();
   await expect(page.getByRole('button', { name: 'Edit draft' })).toBeVisible();
   const claimId = Number((await page.locator('.claim-detail .eyebrow').textContent()).match(/#(\d+)/)[1]);
+  await attachReceipt(page);
   await submitClaim(page);
   await expect(page.getByText('Another manager must review this claim.')).toBeVisible();
   for (const name of ['Approve claim', 'Reject claim', 'Mark as paid']) await expect(page.getByRole('button', { name })).toHaveCount(0);
@@ -387,7 +420,7 @@ test('rapid workspace changes discard delayed real collection responses', async 
     const createClaim = async (context, title) => {
       const response = await context.post('/api/claims', {
         headers: { 'Idempotency-Key': randomUUID() },
-        data: { title, category: 'Travel', description: 'Workspace race fixture', expense_date: new Date().toISOString().slice(0, 10), amount_paise: 10000 },
+        data: { title, category: 'travel and stay', description: 'Workspace race fixture', expense_date: '2020-01-02T10:00:00Z', amount_paise: 10000 },
       });
       expect(response.status()).toBe(201);
       return response.json();
@@ -395,7 +428,8 @@ test('rapid workspace changes discard delayed real collection responses', async 
     const own = await createClaim(approverApi, ownTitle);
     ownId = own.id;
     const other = await createClaim(employeeApi, otherTitle);
-    const submission = await employeeApi.post(`/api/claims/${other.id}/submit`, { data: { version: other.version } });
+    const ready = await attachApiReceipt(employeeApi, other);
+    const submission = await employeeApi.post(`/api/claims/${other.id}/submit`, { data: { version: ready.version } });
     expect(submission.ok()).toBeTruthy();
   } finally {
     await approverApi.dispose();
@@ -457,15 +491,18 @@ for (const state of ['first submission', 'direct rejected resubmission', 'correc
       for (const [context, username] of [[employee, 'employee'], [manager, 'manager']]) {
         expect((await context.post('/api/auth/login', { data: { username, password: `${username}123` } })).ok()).toBeTruthy();
       }
-      const payload = { title: `Confirmation ${randomUUID()}`, category: 'Travel', description: 'Confirmation fixture', expense_date: new Date().toISOString().slice(0, 10), amount_paise: 10000 };
+      const payload = { title: `Confirmation ${randomUUID()}`, category: 'travel and stay', description: 'Confirmation fixture', expense_date: '2020-01-02T10:00:00Z', amount_paise: 10000 };
       const created = await employee.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: payload });
       expect(created.status()).toBe(201);
       const claim = await created.json();
+      const ready = await attachApiReceipt(employee, claim);
       if (state !== 'first submission') {
-        expect((await employee.post(`/api/claims/${claim.id}/submit`, { data: { version: claim.version } })).ok()).toBeTruthy();
-        expect((await manager.post(`/api/claims/${claim.id}/review`, { data: { version: 2, decision: 'REJECTED', comment: 'Please correct' } })).ok()).toBeTruthy();
+        const submitted = await employee.post(`/api/claims/${claim.id}/submit`, { data: { version: ready.version } });
+        expect(submitted.ok()).toBeTruthy();
+        const rejected = await manager.post(`/api/claims/${claim.id}/review`, { data: { version: (await submitted.json()).version, decision: 'REJECTED', comment: 'Please correct' } });
+        expect(rejected.ok()).toBeTruthy();
         if (state === 'corrected draft resubmission') {
-          expect((await employee.patch(`/api/claims/${claim.id}`, { data: { ...payload, description: 'Corrected fixture', version: 3 } })).ok()).toBeTruthy();
+          expect((await employee.patch(`/api/claims/${claim.id}`, { data: { ...payload, description: 'Corrected fixture', version: (await rejected.json()).version } })).ok()).toBeTruthy();
         }
       }
       const before = await (await employee.get(`/api/claims/${claim.id}`)).json();
@@ -523,7 +560,7 @@ test('delete confirmation cancels and deletes on mobile', async ({ page }) => {
   const employee = await request.newContext({ baseURL: new URL(page.url()).origin });
   try {
     expect((await employee.post('/api/auth/login', { data: { username: 'employee', password: 'employee123' } })).ok()).toBeTruthy();
-    const payload = { title: `Delete ${randomUUID()}`, category: 'Travel', description: 'Delete fixture', expense_date: new Date().toISOString().slice(0, 10), amount_paise: 10000 };
+    const payload = { title: `Delete ${randomUUID()}`, category: 'travel and stay', description: 'Delete fixture', expense_date: '2020-01-02T10:00:00Z', amount_paise: 10000 };
     const claim = await (await employee.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: payload })).json();
     const before = await (await employee.get(`/api/claims/${claim.id}`)).json();
     const unexpectedDialogs = [];
@@ -569,19 +606,20 @@ test('confirmation submits the captured version after an external edit', async (
   const employee = await request.newContext({ baseURL: new URL(page.url()).origin });
   try {
     expect((await employee.post('/api/auth/login', { data: { username: 'employee', password: 'employee123' } })).ok()).toBeTruthy();
-    const payload = { title: `Stale ${randomUUID()}`, category: 'Travel', description: 'Snapshot fixture', expense_date: new Date().toISOString().slice(0, 10), amount_paise: 10000 };
+    const payload = { title: `Stale ${randomUUID()}`, category: 'travel and stay', description: 'Snapshot fixture', expense_date: '2020-01-02T10:00:00Z', amount_paise: 10000 };
     const claim = await (await employee.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: payload })).json();
+    const ready = await attachApiReceipt(employee, claim);
     await signIn(page, 'employee');
     await page.getByRole('button', { name: payload.title }).click();
     await page.getByRole('button', { name: 'Submit claim' }).click();
     const modal = page.getByRole('dialog', { name: 'Submit claim?' });
     await expect(modal).toBeVisible();
-    expect((await employee.patch(`/api/claims/${claim.id}`, { data: { ...payload, description: 'External edit', version: claim.version } })).ok()).toBeTruthy();
+    expect((await employee.patch(`/api/claims/${claim.id}`, { data: { ...payload, description: 'External edit', version: ready.version } })).ok()).toBeTruthy();
     const response = page.waitForResponse((res) => res.url().endsWith(`/api/claims/${claim.id}/submit`) && res.request().method() === 'POST');
     await modal.getByRole('button', { name: 'Submit claim' }).click();
     const result = await response;
     expect(result.status()).toBe(409);
-    expect(result.request().postDataJSON()).toEqual({ version: claim.version });
+    expect(result.request().postDataJSON()).toEqual({ version: ready.version });
     await expect(page.getByRole('alert')).toContainText('changed since it was opened');
     const after = await (await employee.get(`/api/claims/${claim.id}`)).json();
     expect(after.status).toBe('DRAFT');
@@ -598,7 +636,8 @@ test('receipt attaches to a merchant draft', async ({ page }) => {
   await signIn(page, 'employee');
   await page.getByRole('button', { name: 'New claim' }).click();
   await page.getByLabel('Claim title').fill(title);
-  await page.getByLabel('Category').fill('Travel');
+  await page.getByLabel('Category').selectOption('travel and stay');
+  await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
   await page.getByLabel('Requested amount (₹)').fill('100');
   await page.getByLabel('Business purpose / expense details').fill('Client visit');
   await page.getByLabel('Merchant').fill('Example shop');
@@ -644,13 +683,13 @@ test('receipt validation and removal preserve history on narrow screens', async 
   try {
     expect((await employee.post('/api/auth/login', { data: { username: 'employee', password: 'employee123' } })).ok()).toBeTruthy();
     const title = 'Removal ' + randomUUID();
-    const claim = await (await employee.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: { title, category: 'Travel', description: 'Receipt removal', expense_date: new Date().toISOString().slice(0, 10), amount_paise: 10000 } })).json();
+    const claim = await (await employee.post('/api/claims', { headers: { 'Idempotency-Key': randomUUID() }, data: { title, category: 'travel and stay', description: 'Receipt removal', expense_date: '2020-01-02T10:00:00Z', amount_paise: 10000 } })).json();
     await signIn(page, 'employee');
     await page.getByRole('button', { name: title }).click();
     await page.getByLabel('Choose receipt').setInputFiles({ name: 'bad.txt', mimeType: 'text/plain', buffer: Buffer.from('bad') });
     await expect(page.getByRole('alert')).toContainText('Choose a PNG');
-    await page.getByLabel('Choose receipt').setInputFiles({ name: 'large.png', mimeType: 'image/png', buffer: Buffer.alloc(5 * 1024 * 1024 + 1) });
-    await expect(page.getByRole('alert')).toContainText('5 MiB');
+    await page.getByLabel('Choose receipt').setInputFiles({ name: 'large.png', mimeType: 'image/png', buffer: Buffer.alloc(5_000_001) });
+    await expect(page.getByRole('alert')).toContainText('5 MB');
     expect((await (await employee.get(`/api/claims/${claim.id}`)).json()).version).toBe(claim.version);
     await page.getByLabel('Choose receipt').setInputFiles({ name: 'bill.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aKsAAAAASUVORK5CYII=', 'base64') });
     await page.getByRole('button', { name: 'Attach receipt' }).click();
@@ -675,5 +714,189 @@ test('receipt validation and removal preserve history on narrow screens', async 
     await expect(page.getByText('No receipt attached')).toBeVisible();
     expect(deletes).toBe(1);
     await expect(page.getByText('Receipt removed', { exact: true })).toBeVisible();
+  } finally { await employee.dispose(); }
+});
+
+test('receipt guidance blocks submission until attached', async ({ page }) => {
+  await page.goto('/');
+  const employee = await request.newContext({ baseURL: new URL(page.url()).origin });
+  try {
+    expect((await employee.post('/api/auth/login', { data: { username: 'employee', password: 'employee123' } })).ok()).toBeTruthy();
+    const title = `Receipt required ${randomUUID()}`;
+    await signIn(page, 'employee');
+    await page.getByRole('button', { name: 'New claim' }).click();
+    await page.getByLabel('Claim title').fill(title);
+    await page.getByLabel('Category').selectOption('meals');
+    await page.getByLabel('Expense date and time').fill('2020-01-02T10:00');
+    await page.getByLabel('Requested amount (₹)').fill('100');
+    await page.getByLabel('Business purpose / expense details').fill('Receipt guidance');
+    const createdResponse = page.waitForResponse((response) => response.url().endsWith('/api/claims') && response.request().method() === 'POST');
+    await page.getByRole('button', { name: 'Create draft' }).click();
+    const created = await createdResponse;
+    expect(created.status()).toBe(201);
+    await expect(page.getByRole('heading', { name: title })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Submit claim' })).toBeDisabled();
+    await expect(page.locator('.claim-detail')).toContainText(/receipt.*required|required.*receipt/i);
+    await page.getByLabel('Choose receipt').setInputFiles({ name: 'bill.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aKsAAAAASUVORK5CYII=', 'base64') });
+    await page.getByRole('button', { name: 'Attach receipt' }).click();
+    await expect(page.getByRole('button', { name: 'Submit claim' })).toBeEnabled();
+    await submitClaim(page);
+    await expect(page.locator('.status-submitted').last()).toBeVisible();
+    const claim = await created.json();
+    const manager = await request.newContext({ baseURL: new URL(page.url()).origin });
+    try {
+      expect((await manager.post('/api/auth/login', { data: { username: 'manager', password: 'manager123' } })).ok()).toBeTruthy();
+      const submitted = await (await manager.get(`/api/claims/${claim.id}`)).json();
+      expect((await manager.post(`/api/claims/${claim.id}/review`, { data: { version: submitted.version, decision: 'REJECTED', comment: 'Please correct' } })).ok()).toBeTruthy();
+      await page.reload();
+      await page.getByRole('button', { name: title }).click();
+      await page.getByRole('button', { name: 'Remove receipt' }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Remove receipt' }).click();
+      await expect(page.getByRole('button', { name: 'Submit claim' })).toBeDisabled();
+      await expect(page.locator('.claim-detail')).toContainText(/receipt.*required|required.*receipt/i);
+      await attachReceipt(page);
+      await expect(page.getByRole('button', { name: 'Submit claim' })).toBeEnabled();
+      await page.getByRole('button', { name: 'Submit claim' }).click();
+      await expect(page.getByRole('dialog', { name: 'Resubmit claim?' })).toBeVisible();
+    } finally { await manager.dispose(); }
+  } finally { await employee.dispose(); }
+});
+
+test('local expense time round trips without changing its instant', async ({ browser }) => {
+  const context = await browser.newContext({ baseURL: 'http://127.0.0.1:15173', timezoneId: 'Asia/Kolkata' });
+  const page = await context.newPage();
+  try {
+    await page.goto('/');
+    await signIn(page, 'employee');
+    const title = `Local time ${randomUUID()}`;
+    await page.getByRole('button', { name: 'New claim' }).click();
+    await page.getByLabel('Claim title').fill(title);
+    await page.getByLabel('Category').selectOption('meals');
+    await page.getByLabel('Expense date and time').fill('2020-01-02T10:30:25');
+    await page.getByLabel('Requested amount (₹)').fill('100');
+    await page.getByLabel('Business purpose / expense details').fill('Timezone fixture');
+    const response = page.waitForResponse((r) => r.url().endsWith('/api/claims') && r.request().method() === 'POST');
+    await page.getByRole('button', { name: 'Create draft' }).click();
+    const created = await (await response).json();
+    expect(new Date(created.expense_date).toISOString()).toBe('2020-01-02T05:00:25.000Z');
+    await expect(page.locator('.claim-facts')).toContainText('10:30:25');
+    await expect(page.locator('.claim-facts')).toContainText('Asia/Calcutta');
+    await page.getByRole('button', { name: 'Edit draft' }).click();
+    await page.getByLabel('Merchant').fill('Unrelated edit');
+    const patch = page.waitForResponse((r) => r.url().endsWith(`/api/claims/${created.id}`) && r.request().method() === 'PATCH');
+    await page.getByRole('button', { name: 'Save changes' }).click();
+    expect((await (await patch).json()).expense_date).toBe(created.expense_date);
+  } finally { await context.close(); }
+});
+
+test('nonexistent local expense time is rejected without creating a draft', async ({ browser }) => {
+  const context = await browser.newContext({ baseURL: 'http://127.0.0.1:15173', timezoneId: 'America/New_York' });
+  const page = await context.newPage();
+  try {
+    await page.goto('/');
+    await signIn(page, 'employee');
+    const title = `Spring gap ${randomUUID()}`;
+    let createRequests = 0;
+    page.on('request', (request) => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/claims') createRequests += 1;
+    });
+    await page.getByRole('button', { name: 'New claim' }).click();
+    await page.getByLabel('Claim title').fill(title);
+    await page.getByLabel('Category').selectOption('meals');
+    await page.getByLabel('Expense date and time').fill('2025-03-09T02:30');
+    await page.getByLabel('Requested amount (₹)').fill('100');
+    await page.getByLabel('Business purpose / expense details').fill('Nonexistent local clock regression');
+    await page.getByRole('button', { name: 'Create draft' }).click();
+    await expect.soft(page.getByRole('alert')).toContainText(/valid expense date and time/i, { timeout: 1000 });
+    await expect.soft(page.locator('.claim-form')).toBeVisible();
+    expect.soft(createRequests).toBe(0);
+    const claims = await (await page.request.get('/api/claims')).json();
+    expect.soft(claims.some((claim) => claim.title === title)).toBe(false);
+  } finally { await context.close(); }
+});
+
+test('unchanged stored instant characterization preserves repeated-hour precision', async ({ browser }) => {
+  const context = await browser.newContext({ baseURL: 'http://127.0.0.1:15173', timezoneId: 'America/New_York' });
+  const page = await context.newPage();
+  const employee = await request.newContext({ baseURL: 'http://127.0.0.1:15173' });
+  try {
+    expect((await employee.post('/api/auth/login', { data: { username: 'employee', password: 'employee123' } })).ok()).toBeTruthy();
+    const title = `Repeated hour ${randomUUID()}`;
+    const createdResponse = await employee.post('/api/claims', {
+      headers: { 'Idempotency-Key': randomUUID() },
+      data: { title, category: 'meals', description: 'Repeated-hour precision characterization', expense_date: '2024-11-03T06:30:12.123456Z', amount_paise: 10000 },
+    });
+    expect(createdResponse.ok()).toBeTruthy();
+    const created = await createdResponse.json();
+    expect(created.expense_date).toMatch(/\.123456(?:Z|\+00:00)$/);
+    await page.goto('/');
+    await signIn(page, 'employee');
+    await page.getByRole('button', { name: title }).click();
+    await page.getByRole('button', { name: 'Edit draft' }).click();
+    await page.getByLabel('Claim title').fill(`${title} edited`);
+    await page.getByLabel('Merchant').fill('Unrelated edit');
+    const patch = page.waitForResponse((response) => response.url().endsWith(`/api/claims/${created.id}`) && response.request().method() === 'PATCH');
+    await page.getByRole('button', { name: 'Save changes' }).click();
+    expect((await (await patch).json()).expense_date).toBe(created.expense_date);
+  } finally {
+    await employee.dispose();
+    await context.close();
+  }
+});
+
+test('legacy date and category remain visible and require correction', async ({ page }) => {
+  await page.goto('/');
+  const employee = await request.newContext({ baseURL: new URL(page.url()).origin });
+  try {
+    expect((await employee.post('/api/auth/login', { data: { username: 'employee', password: 'employee123' } })).ok()).toBeTruthy();
+    const categories = ['Historic category', '__proto__', 'constructor'];
+    const createdClaims = await Promise.all(categories.map(async (category) => {
+      const title = `Legacy ${category} ${randomUUID()}`;
+      const response = await employee.post('/api/claims', {
+        headers: { 'Idempotency-Key': randomUUID() },
+        data: { title, category: 'meals', description: 'Legacy read fixture', expense_date: '2020-01-02T10:00:00Z', amount_paise: 10000 },
+      });
+      expect(response.ok()).toBeTruthy();
+      return { ...(await response.json()), legacyCategory: category };
+    }));
+    const legacyById = new Map(createdClaims.map((claim) => [claim.id, claim.legacyCategory]));
+    const listDtoIds = [];
+    const legacy = (claim) => {
+      const category = legacyById.get(claim.id);
+      if (!category) return claim;
+      return { ...claim, category, expense_date: '2019-04-03', ...(claim.history ? { history: claim.history.map((event) => ({ ...event, category, expense_date: '2019-04-03' })) } : {}) };
+    };
+    await page.route('**/api/claims', async (route) => {
+      if (route.request().method() !== 'GET') return route.continue();
+      const response = await route.fetch();
+      const claims = await response.json();
+      listDtoIds.push(...claims.filter((claim) => legacyById.has(claim.id)).map((claim) => claim.id));
+      await route.fulfill({ response, json: claims.map(legacy) });
+    });
+    await page.route('**/api/claims/*', async (route) => {
+      if (route.request().method() !== 'GET') return route.continue();
+      const response = await route.fetch();
+      await route.fulfill({ response, json: legacy(await response.json()) });
+    });
+    const pageErrors = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    await signIn(page, 'employee');
+    expect(pageErrors).toEqual([]);
+    await expect.poll(() => listDtoIds.length).toBe(createdClaims.length);
+    expect([...listDtoIds].sort()).toEqual(createdClaims.map((claim) => claim.id).sort());
+    for (const claim of createdClaims) {
+      const row = page.locator('.claim-select').filter({ hasText: claim.title });
+      await expect(row).toHaveCount(1);
+      await expect(row).toContainText(claim.legacyCategory);
+      await row.click();
+      await expect(page.locator('.claim-detail')).toContainText('2019-04-03 · time not recorded');
+      await expect(page.locator('.timeline')).toContainText(claim.legacyCategory);
+      await page.getByRole('button', { name: 'Edit draft' }).click();
+      await expect(page.getByLabel('Category')).toHaveValue('');
+      await expect(page.getByLabel('Expense date and time')).toHaveValue('');
+      await expect(page.locator('.claim-form')).toContainText('Original date: 2019-04-03');
+      await expect(page.locator('.claim-form')).toContainText(`Original category: ${claim.legacyCategory}`);
+      await page.getByRole('button', { name: 'Cancel' }).click();
+    }
   } finally { await employee.dispose(); }
 });

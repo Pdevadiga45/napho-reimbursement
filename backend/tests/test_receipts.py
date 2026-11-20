@@ -96,12 +96,29 @@ def test_rejected_replacement_detach_and_historical_read(client, approver):
     assert client.patch(f'/api/claims/{cid}', json={**claim_payload(merchant='New'), 'version': 5}).status_code == 200
     assert client.delete(f'/api/claims/{cid}/receipt?version=6').json()['receipt'] is None
     assert client.delete(f'/api/claims/{cid}/receipt?version=7').status_code == 409
-    assert submit_claim(client, cid, 7).status_code == 200
+    before = client.get(f'/api/claims/{cid}').json()
+    assert submit_claim(client, cid, 7).status_code == 422
+    assert client.get(f'/api/claims/{cid}').json() == before
+    reattached = upload(client, cid, 7).json()
+    assert submit_claim(client, cid, reattached['version']).status_code == 200
     history = client.get(f'/api/claims/{cid}').json()['history']
-    assert [e['action'] for e in history] == ['CREATED', 'RECEIPT_ATTACHED', 'SUBMITTED', 'REJECTED', 'RECEIPT_REPLACED', 'EDITED', 'RECEIPT_REMOVED', 'SUBMITTED']
+    assert [e['action'] for e in history] == ['CREATED', 'RECEIPT_ATTACHED', 'SUBMITTED', 'REJECTED', 'RECEIPT_REPLACED', 'EDITED', 'RECEIPT_REMOVED', 'RECEIPT_ATTACHED', 'SUBMITTED']
     assert history[3]['receipt'] == original and history[3]['merchant'] == 'Original'
     assert history[4]['receipt'] == corrected['receipt'] and history[6]['receipt'] is None
     assert approver.get(f"/api/claims/{cid}/receipts/{original['id']}").content == PNG
+
+
+def test_legacy_rejected_without_receipt_cannot_resubmit(application, client):
+    cid = create_claim(client).json()['id']
+    connection = application.state.database.connect()
+    try:
+        connection.execute("UPDATE claims SET status='REJECTED' WHERE id=?", (cid,))
+    finally:
+        connection.close()
+    before = client.get(f'/api/claims/{cid}').json()
+    assert 'submit' in before['allowed_actions'] and before['submission_errors']
+    assert submit_claim(client, cid, before['version']).status_code == 422
+    assert client.get(f'/api/claims/{cid}').json() == before
 
 
 def test_pdf_cascade_and_transaction_rollback(application, client, monkeypatch):
@@ -158,14 +175,23 @@ def test_legacy_schema_migration_is_additive(tmp_path):
 
 def test_upload_and_submit_compete_for_same_version(client):
     cid = create_claim(client).json()['id']
+    initial = upload(client, cid, 1).json()
     with ThreadPoolExecutor(max_workers=2) as pool:
-        upload_future = pool.submit(upload, client, cid, 1)
-        submit_future = pool.submit(submit_claim, client, cid, 1)
+        upload_future = pool.submit(upload, client, cid, initial['version'], 'replacement.png')
+        submit_future = pool.submit(submit_claim, client, cid, initial['version'])
         statuses = sorted([upload_future.result().status_code, submit_future.result().status_code])
     assert statuses == [200, 409]
     detail = client.get(f'/api/claims/{cid}').json()
-    assert detail['version'] == 2 and len(detail['history']) == 2
-    assert (detail['status'] == 'DRAFT') == (detail['receipt'] is not None)
+    assert detail['version'] == 3 and len(detail['history']) == 3
+    assert detail['history'][0]['action'] == 'CREATED'
+    assert detail['history'][1]['action'] == 'RECEIPT_ATTACHED'
+    if detail['status'] == 'DRAFT':
+        assert detail['history'][2]['action'] == 'RECEIPT_REPLACED'
+        assert detail['receipt']['id'] != initial['receipt']['id']
+    else:
+        assert detail['status'] == 'SUBMITTED'
+        assert detail['history'][2]['action'] == 'SUBMITTED'
+        assert detail['receipt'] == initial['receipt']
 
 
 def test_pdf_limits_and_truncated_image(client):
@@ -197,3 +223,15 @@ def test_stream_limit_without_content_length(client):
     response = client.post(f'/api/claims/{cid}/receipt?version=1&filename=bill.png', content=chunks())
     assert response.status_code == 413
     assert client.get(f'/api/claims/{cid}').json()['version'] == 1
+
+
+@pytest.mark.parametrize('streamed', [False, True])
+def test_exact_receipt_byte_boundary(client, streamed):
+    cid = create_claim(client).json()['id']
+    content = PNG + b'\x00' * (5_000_000 - len(PNG))
+    def body(data):
+        return iter([data[:2_500_000], data[2_500_000:]]) if streamed else data
+    assert upload(client, cid, 1, content=body(content + b'\x00')).status_code == 413
+    response = upload(client, cid, 1, content=body(content))
+    assert response.status_code == 200
+    assert response.json()['receipt']['size'] == 5_000_000

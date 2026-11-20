@@ -8,7 +8,7 @@ import secrets
 import sqlite3
 from urllib.parse import quote
 from contextlib import asynccontextmanager, contextmanager
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Literal
 from uuid import UUID
@@ -25,6 +25,7 @@ from policy import allowed_actions, can_view, permissions_for
 
 
 MAX_AMOUNT_PAISE = 10_000_000_000
+CATEGORIES = {"travel and stay", "meals", "work & tech", "others"}
 MOCK_SESSION_SECRET = "napho-mock-development-only-session-secret"
 MOCK_ACCOUNTS = {
     "employee": ("employee123", 1, "Employee One", "EMPLOYEE"),
@@ -45,7 +46,7 @@ class ClaimFields(APIModel):
     title: StrictStr = Field(max_length=120)
     description: StrictStr = Field(max_length=2000)
     category: StrictStr = Field(max_length=80)
-    expense_date: date
+    expense_date: datetime
     amount_paise: StrictInt = Field(gt=0, le=MAX_AMOUNT_PAISE)
     merchant: StrictStr = Field(default="", max_length=120)
 
@@ -54,7 +55,7 @@ class ClaimFields(APIModel):
     def trim_merchant(cls, value: Any) -> Any:
         return value.strip() if isinstance(value, str) else value
 
-    @field_validator("title", "description", "category")
+    @field_validator("title", "description")
     @classmethod
     def trim_required_text(cls, value: str) -> str:
         normalized = value.strip()
@@ -62,10 +63,29 @@ class ClaimFields(APIModel):
             raise ValueError("must not be blank")
         return normalized
 
-    @field_validator("expense_date")
+    @field_validator("category")
     @classmethod
-    def expense_date_is_not_future(cls, value: date) -> date:
-        if value > datetime.now(timezone.utc).date():
+    def valid_category(cls, value: str) -> str:
+        if value not in CATEGORIES:
+            raise ValueError("Choose a current category")
+        return value
+
+    @field_validator("expense_date", mode="before")
+    @classmethod
+    def expense_date_is_not_future(cls, value: Any) -> datetime:
+        if not isinstance(value, str) or len(value) < 11 or value[10] not in "Tt":
+            raise ValueError("expense_date must include date, time and timezone")
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError as error:
+            raise ValueError("expense_date must include date, time and timezone") from error
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("expense_date must include date, time and timezone")
+        try:
+            value = parsed.astimezone(timezone.utc)
+        except OverflowError as error:
+            raise ValueError("expense_date is outside the supported range") from error
+        if value > datetime.now(timezone.utc):
             raise ValueError("expense_date must not be in the future")
         return value
 
@@ -116,6 +136,17 @@ def receipt_metadata(row: sqlite3.Row) -> dict[str, Any] | None:
     return {key: row[f"receipt_{key}"] for key in ("id", "filename", "content_type", "size", "sha256", "created_at")}
 
 
+def submission_errors(row: sqlite3.Row) -> list[str]:
+    errors = [] if row["receipt_id"] is not None else ["Attach a receipt before submitting"]
+    if row["category"] not in CATEGORIES:
+        errors.append("Choose a current category")
+    try:
+        ClaimFields.expense_date_is_not_future(row["expense_date"])
+    except ValueError:
+        errors.append("Enter an expense date and time with timezone")
+    return errors
+
+
 def claim_response(row: sqlite3.Row, user: dict[str, Any]) -> dict[str, Any]:
     fields = (
         "id",
@@ -133,8 +164,11 @@ def claim_response(row: sqlite3.Row, user: dict[str, Any]) -> dict[str, Any]:
         "version",
         "merchant",
     )
-    return {**{field: row[field] for field in fields}, "has_review_history": bool(row["has_review_history"]),
-            "allowed_actions": allowed_actions(user, row), "receipt": receipt_metadata(row)}
+    result = {**{field: row[field] for field in fields}, "has_review_history": bool(row["has_review_history"]),
+              "allowed_actions": allowed_actions(user, row), "receipt": receipt_metadata(row)}
+    if row["owner_id"] == user["id"] and "submit" in result["allowed_actions"]:
+        result["submission_errors"] = submission_errors(row)
+    return result
 
 
 @contextmanager
@@ -362,6 +396,9 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 raise HTTPException(status_code=409, detail="Claim version is stale")
             if "submit" not in allowed_actions(user, row):
                 raise HTTPException(status_code=409, detail="Claim cannot be submitted in its current status")
+            errors = submission_errors(row)
+            if errors:
+                raise HTTPException(status_code=422, detail=errors)
             now = utc_now()
             updated = store.submit_claim(connection, claim_id, body.version, now)
             if updated != 1:
@@ -474,11 +511,11 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid Content-Length")
             if parsed_length > receipts.MAX_BYTES:
-                raise HTTPException(status_code=413, detail="Receipt exceeds 5 MiB")
+                raise HTTPException(status_code=413, detail="Receipt exceeds 5 MB")
         data = bytearray()
         async for chunk in request.stream():
             if len(data) + len(chunk) > receipts.MAX_BYTES:
-                raise HTTPException(status_code=413, detail="Receipt exceeds 5 MiB")
+                raise HTTPException(status_code=413, detail="Receipt exceeds 5 MB")
             data.extend(chunk)
         content = bytes(data)
         try:

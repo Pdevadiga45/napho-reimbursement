@@ -1,4 +1,5 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+import base64
 from uuid import uuid4
 
 import pytest
@@ -37,10 +38,10 @@ def test_legacy_manager_identity_migrates_without_changing_claim_or_events(tmp_p
     with TestClient(application) as employee:
         assert employee.post("/api/auth/login", json={"username": "employee", "password": "employee123"}).status_code == 200
         claim = create_claim(employee).json()
-        assert submit_claim(employee, claim["id"], claim["version"]).status_code == 200
+        assert submit_claim(employee, claim["id"], attach_receipt(employee, claim["id"], claim["version"])).status_code == 200
     with TestClient(application) as manager:
         assert manager.post("/api/auth/login", json={"username": "manager", "password": "manager123"}).status_code == 200
-        assert manager.post(f"/api/claims/{claim['id']}/review", json={"version": 2, "decision": "APPROVED", "approved_amount_paise": 12500}).status_code == 200
+        assert manager.post(f"/api/claims/{claim['id']}/review", json={"version": 3, "decision": "APPROVED", "approved_amount_paise": 12500}).status_code == 200
         manager_cookie = manager.cookies.get("napho_session")
 
     database = Database(path)
@@ -69,7 +70,7 @@ def test_legacy_manager_identity_migrates_without_changing_claim_or_events(tmp_p
         manager.cookies.set("napho_session", manager_cookie)
         assert manager.get("/api/auth/me").json()["name"] == "Manager One"
         assert manager.post("/api/auth/login", json={"username": "manager", "password": "manager123"}).json()["name"] == "Manager One"
-        assert manager.get(f"/api/claims/{claim['id']}").json()["history"][2]["actor_name"] == "Manager One"
+        assert manager.get(f"/api/claims/{claim['id']}").json()["history"][3]["actor_name"] == "Manager One"
 
 
 def test_session_logout_tamper_validation_and_header_spoof(application, client, approver):
@@ -78,8 +79,8 @@ def test_session_logout_tamper_validation_and_header_spoof(application, client, 
     assert client.get("/api/auth/me").json()["role"] == "EMPLOYEE"
     assert approver.get("/api/auth/me").json()["role"] == "APPROVER"
     claim = create_claim(client).json()
-    assert submit_claim(client, claim["id"], 1).status_code == 200
-    assert client.post(f"/api/claims/{claim['id']}/review", headers=headers(3), json={"version": 2, "decision": "APPROVED", "approved_amount_paise": 12500}).status_code == 403
+    assert submit_claim(client, claim["id"], attach_receipt(client, claim["id"], 1)).status_code == 200
+    assert client.post(f"/api/claims/{claim['id']}/review", headers=headers(3), json={"version": 3, "decision": "APPROVED", "approved_amount_paise": 12500}).status_code == 403
     with TestClient(application) as anonymous:
         anonymous.cookies.set("napho_session", cookie + "tampered")
         assert anonymous.get("/api/auth/me").status_code == 401
@@ -132,8 +133,8 @@ def claim_payload(**overrides):
     return {
         "title": "Client visit taxi",
         "description": "Taxi from office to customer site",
-        "category": "Travel",
-        "expense_date": "2025-02-03",
+        "category": "travel and stay",
+        "expense_date": "2025-02-03T00:00:00+00:00",
         "amount_paise": 12500,
         **overrides,
     }
@@ -153,10 +154,110 @@ def submit_claim(client: TestClient, claim_id: int, version: int):
     )
 
 
+def attach_receipt(client, claim_id, version):
+    png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aKsAAAAASUVORK5CYII=')
+    response = client.post(f"/api/claims/{claim_id}/receipt", params={"version": version, "filename": "bill.png"}, content=png)
+    assert response.status_code == 200
+    return response.json()["version"]
+
+
 def review_claim(client: TestClient, claim_id: int, payload):
     return client.post(
         f"/api/claims/{claim_id}/review", json=payload
     )
+
+
+def test_submission_requires_receipt_without_mutation(client):
+    claim = create_claim(client).json()
+    before = client.get(f"/api/claims/{claim['id']}").json()
+    assert "submit" in before["allowed_actions"]
+    assert before["submission_errors"]
+    response = submit_claim(client, claim["id"], claim["version"])
+    assert response.status_code == 422
+    assert client.get(f"/api/claims/{claim['id']}").json() == before
+
+
+def test_expense_datetime_requires_timezone_and_normalizes(client):
+    response = create_claim(client, claim_payload(expense_date="2025-02-03T12:30:00+05:30"))
+    assert response.status_code == 201
+    claim = response.json()
+    assert claim["expense_date"] == "2025-02-03T07:00:00+00:00"
+    assert client.get(f"/api/claims/{claim['id']}").json()["history"][0]["expense_date"] == claim["expense_date"]
+    for value in ("2025-02-03", "2025-02-03T12:30:00", 1738582200, "2999-01-01T00:00:00Z", "0001-01-01T00:00:00+14:00"):
+        assert create_claim(client, claim_payload(expense_date=value)).status_code == 422
+    future = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()
+    assert create_claim(client, claim_payload(expense_date=future)).status_code == 422
+    for value in (future, "2025-02-03T12:30:00", 1738582200):
+        assert client.patch(f"/api/claims/{claim['id']}", json={**claim_payload(expense_date=value), "version": 1}).status_code == 422
+
+
+def test_datetime_equivalence_persists_in_store_history_and_reopen(application, client):
+    created = create_claim(client, claim_payload(expense_date="2025-02-03T12:30:15+05:30")).json()
+    cid = created['id']
+    canonical = '2025-02-03T07:00:15+00:00'
+    edited = client.patch(f'/api/claims/{cid}', json={**claim_payload(expense_date='2025-02-03T02:00:15-05:00'), 'version': 1}).json()
+    assert created['expense_date'] == edited['expense_date'] == canonical
+    connection = application.state.database.connect()
+    try:
+        assert connection.execute('SELECT expense_date FROM claims WHERE id = ?', (cid,)).fetchone()[0] == canonical
+    finally:
+        connection.close()
+    with TestClient(create_app(application.state.database.path)) as reopened:
+        reopened.post('/api/auth/login', json={'username': 'employee', 'password': 'employee123'})
+        detail = reopened.get(f'/api/claims/{cid}').json()
+        assert detail['expense_date'] == canonical
+        assert [event['expense_date'] for event in detail['history']] == [canonical, canonical]
+
+
+def test_legacy_editable_values_require_correction_and_preserve_history(application, client):
+    claim = create_claim(client).json()
+    cid = claim['id']
+    # Source-shaped legacy data: its original date and category have no implied replacements.
+    connection = application.state.database.connect()
+    try:
+        connection.execute("UPDATE claims SET category='Travel', expense_date='2025-02-03' WHERE id=?", (cid,))
+        connection.execute("UPDATE claim_events SET category='Travel', expense_date='2025-02-03' WHERE claim_id=?", (cid,))
+    finally:
+        connection.close()
+    before = client.get(f'/api/claims/{cid}').json()
+    assert (before['category'], before['expense_date']) == ('Travel', '2025-02-03')
+    assert len(before['submission_errors']) == 3
+    assert submit_claim(client, cid, before['version']).status_code == 422
+    assert client.get(f'/api/claims/{cid}').json() == before
+    version = attach_receipt(client, cid, before['version'])
+    assert submit_claim(client, cid, version).status_code == 422
+    corrected = client.patch(f'/api/claims/{cid}', json={**claim_payload(), 'version': version}).json()
+    assert submit_claim(client, cid, corrected['version']).status_code == 200
+    history = client.get(f'/api/claims/{cid}').json()['history']
+    assert (history[0]['category'], history[0]['expense_date']) == ('Travel', '2025-02-03')
+
+
+def test_legacy_submitted_claim_remains_readable_and_reviewable(application, client, approver):
+    cid = create_claim(client).json()['id']
+    connection = application.state.database.connect()
+    try:
+        connection.execute("UPDATE claims SET status='SUBMITTED', category='Travel', expense_date='2025-02-03' WHERE id=?", (cid,))
+        connection.execute("UPDATE claim_events SET category='Travel', expense_date='2025-02-03' WHERE claim_id=?", (cid,))
+    finally:
+        connection.close()
+    before = client.get(f'/api/claims/{cid}').json()
+    assert (before['status'], before['category'], before['expense_date'], before['receipt']) == ('SUBMITTED', 'Travel', '2025-02-03', None)
+    assert approver.get(f'/api/claims/{cid}').status_code == 200
+    assert client.get(f'/api/claims/{cid}').json() == before
+    assert review_claim(approver, cid, {'version': before['version'], 'decision': 'APPROVED', 'approved_amount_paise': 12500}).status_code == 200
+    detail = client.get(f'/api/claims/{cid}').json()
+    assert detail['expense_date'] == detail['history'][0]['expense_date'] == '2025-02-03'
+
+
+@pytest.mark.parametrize("category", ["travel and stay", "meals", "work & tech", "others"])
+def test_categories_are_closed_on_create_and_edit(client, category):
+    created = create_claim(client, claim_payload(category=category))
+    assert created.status_code == 201
+    claim = created.json()
+    assert client.patch(f"/api/claims/{claim['id']}", json={**claim_payload(category=category), "version": 1}).status_code == 200
+    assert create_claim(client, claim_payload(category="unknown")).status_code == 422
+    assert client.patch(f"/api/claims/{claim['id']}", json={**claim_payload(category="unknown"), "version": 2}).status_code == 422
+    assert create_claim(client, claim_payload(category=" meals ")).status_code == 422
 
 
 def test_create_list_and_detail_return_owner_and_snapshot_history(client: TestClient, approver: TestClient) -> None:
@@ -229,7 +330,7 @@ def test_partial_approval_and_payment_preserve_requested_amount(client: TestClie
         f"/api/claims/{claim_id}",
         json={**claim_payload(), "version": 1},
     ).status_code == 404
-    submitted = submit_claim(client, claim_id, created["version"])
+    submitted = submit_claim(client, claim_id, attach_receipt(client, claim_id, created["version"]))
     assert submitted.status_code == 200
     assert submitted.json()["status"] == "SUBMITTED"
 
@@ -237,36 +338,36 @@ def test_partial_approval_and_payment_preserve_requested_amount(client: TestClie
     assert review_claim(
         client,
         claim_id,
-        {"version": 2, "decision": "APPROVED", "approved_amount_paise": 7500, "comment": "Within policy"},
+        {"version": 3, "decision": "APPROVED", "approved_amount_paise": 7500, "comment": "Within policy"},
     ).status_code == 403
     approved = review_claim(
         approver,
         claim_id,
-        {"version": 2, "decision": "APPROVED", "approved_amount_paise": 7500, "comment": "Within policy"},
+        {"version": 3, "decision": "APPROVED", "approved_amount_paise": 7500, "comment": "Within policy"},
     )
     assert approved.status_code == 200
     assert approved.json()["amount_paise"] == 10000
     assert approved.json()["approved_amount_paise"] == 7500
-    assert approved.json()["version"] == 3
+    assert approved.json()["version"] == 4
     assert client.post(
-        f"/api/claims/{claim_id}/pay", json={"version": 3}
+        f"/api/claims/{claim_id}/pay", json={"version": 4}
     ).status_code == 403
 
     paid = approver.post(
-        f"/api/claims/{claim_id}/pay", json={"version": 3}
+        f"/api/claims/{claim_id}/pay", json={"version": 4}
     )
     assert paid.status_code == 200
-    assert (paid.json()["status"], paid.json()["version"]) == ("PAID", 4)
+    assert (paid.json()["status"], paid.json()["version"]) == ("PAID", 5)
     assert approver.post(
-        f"/api/claims/{claim_id}/pay", json={"version": 3}
+        f"/api/claims/{claim_id}/pay", json={"version": 4}
     ).status_code == 409
 
     history = client.get(f"/api/claims/{claim_id}").json()["history"]
-    assert [event["action"] for event in history] == ["CREATED", "SUBMITTED", "APPROVED", "PAID"]
-    assert history[2]["actor_name"] == "Manager One"
-    assert history[2]["comment"] == "Within policy"
-    assert history[2]["amount_paise"] == 10000
-    assert history[2]["approved_amount_paise"] == 7500
+    assert [event["action"] for event in history] == ["CREATED", "RECEIPT_ATTACHED", "SUBMITTED", "APPROVED", "PAID"]
+    assert history[3]["actor_name"] == "Manager One"
+    assert history[3]["comment"] == "Within policy"
+    assert history[3]["amount_paise"] == 10000
+    assert history[3]["approved_amount_paise"] == 7500
 
 
 def test_rejected_claim_edit_and_resubmit_preserve_old_snapshots(client: TestClient, approver: TestClient) -> None:
@@ -274,9 +375,9 @@ def test_rejected_claim_edit_and_resubmit_preserve_old_snapshots(client: TestCli
     key = str(uuid4())
     created = create_claim(client, original, idempotency_key=key).json()
     claim_id = created["id"]
-    assert submit_claim(client, claim_id, 1).status_code == 200
+    assert submit_claim(client, claim_id, attach_receipt(client, claim_id, 1)).status_code == 200
     rejected = review_claim(
-        approver, claim_id, {"version": 2, "decision": "REJECTED", "comment": "Need receipt detail"}
+        approver, claim_id, {"version": 3, "decision": "REJECTED", "comment": "Need receipt detail"}
     )
     assert rejected.status_code == 200
     assert rejected.json()["status"] == "REJECTED"
@@ -284,23 +385,23 @@ def test_rejected_claim_edit_and_resubmit_preserve_old_snapshots(client: TestCli
 
     edited = client.patch(
         f"/api/claims/{claim_id}",
-        json={**claim_payload(title="Updated taxi", amount_paise=9000), "version": 3},
+        json={**claim_payload(title="Updated taxi", amount_paise=9000), "version": 4},
     )
     assert edited.status_code == 200
-    assert (edited.json()["status"], edited.json()["version"]) == ("DRAFT", 4)
+    assert (edited.json()["status"], edited.json()["version"]) == ("DRAFT", 5)
     assert edited.json()["approved_amount_paise"] is None
-    assert submit_claim(client, claim_id, 4).json()["status"] == "SUBMITTED"
+    assert submit_claim(client, claim_id, 5).json()["status"] == "SUBMITTED"
 
     history = client.get(f"/api/claims/{claim_id}").json()["history"]
     assert [event["action"] for event in history] == [
-        "CREATED", "SUBMITTED", "REJECTED", "EDITED", "SUBMITTED"
+        "CREATED", "RECEIPT_ATTACHED", "SUBMITTED", "REJECTED", "EDITED", "SUBMITTED"
     ]
-    assert (history[2]["title"], history[2]["amount_paise"], history[2]["comment"]) == (
+    assert (history[3]["title"], history[3]["amount_paise"], history[3]["comment"]) == (
         "Client visit taxi",
         8000,
         "Need receipt detail",
     )
-    assert (history[3]["title"], history[3]["amount_paise"], history[3]["status"]) == (
+    assert (history[4]["title"], history[4]["amount_paise"], history[4]["status"]) == (
         "Updated taxi",
         9000,
         "DRAFT",
@@ -310,17 +411,17 @@ def test_rejected_claim_edit_and_resubmit_preserve_old_snapshots(client: TestCli
     assert replay.status_code == 200
     assert replay.json()["id"] == claim_id
     assert replay.json()["status"] == "SUBMITTED"
-    assert len(client.get(f"/api/claims/{claim_id}").json()["history"]) == 5
+    assert len(client.get(f"/api/claims/{claim_id}").json()["history"]) == 6
 
 
 def corrected_claim(client, approver):
     created = create_claim(client, claim_payload(amount_paise=8000)).json()
     claim_id = created["id"]
-    assert submit_claim(client, claim_id, 1).status_code == 200
-    assert review_claim(approver, claim_id, {"version": 2, "decision": "REJECTED", "comment": "Check receipt"}).status_code == 200
-    edited = client.patch(f"/api/claims/{claim_id}", json={**claim_payload(title="Corrected taxi", amount_paise=9000), "version": 3})
+    assert submit_claim(client, claim_id, attach_receipt(client, claim_id, 1)).status_code == 200
+    assert review_claim(approver, claim_id, {"version": 3, "decision": "REJECTED", "comment": "Check receipt"}).status_code == 200
+    edited = client.patch(f"/api/claims/{claim_id}", json={**claim_payload(title="Corrected taxi", amount_paise=9000), "version": 4})
     assert edited.status_code == 200
-    assert (edited.json()["status"], edited.json()["version"]) == ("DRAFT", 4)
+    assert (edited.json()["status"], edited.json()["version"]) == ("DRAFT", 5)
     return claim_id
 
 
@@ -328,10 +429,10 @@ def test_corrected_draft_cannot_be_deleted_and_preserves_history(client: TestCli
     claim_id = corrected_claim(client, approver)
     before = client.get(f"/api/claims/{claim_id}").json()
     claims_before = client.get("/api/claims").json()
-    assert client.delete(f"/api/claims/{claim_id}?version=4").status_code == 409
+    assert client.delete(f"/api/claims/{claim_id}?version=5").status_code == 409
     assert client.get(f"/api/claims/{claim_id}").json() == before
     assert client.get("/api/claims").json() == claims_before
-    assert (before["history"][2]["title"], before["history"][2]["amount_paise"], before["history"][2]["comment"]) == ("Client visit taxi", 8000, "Check receipt")
+    assert (before["history"][3]["title"], before["history"][3]["amount_paise"], before["history"][3]["comment"]) == ("Client visit taxi", 8000, "Check receipt")
 
 
 def test_approver_retains_reviewed_correction_visibility(client: TestClient, approver: TestClient) -> None:
@@ -345,11 +446,11 @@ def test_approver_retains_reviewed_correction_visibility(client: TestClient, app
     detail = approver.get(f"/api/claims/{claim_id}")
     assert detail.status_code == 200
     assert detail.json()["has_review_history"] is True
-    assert detail.json()["history"][2]["title"] == "Client visit taxi"
-    assert review_claim(approver, claim_id, {"version": 4, "decision": "APPROVED", "approved_amount_paise": 9000}).status_code == 409
-    assert approver.post(f"/api/claims/{claim_id}/pay", json={"version": 4}).status_code == 409
+    assert detail.json()["history"][3]["title"] == "Client visit taxi"
+    assert review_claim(approver, claim_id, {"version": 5, "decision": "APPROVED", "approved_amount_paise": 9000}).status_code == 409
+    assert approver.post(f"/api/claims/{claim_id}/pay", json={"version": 5}).status_code == 409
     assert approver.get(f"/api/claims/{claim_id}").json() == detail.json()
-    submitted = submit_claim(client, claim_id, 4)
+    submitted = submit_claim(client, claim_id, 5)
     assert submitted.status_code == 200
     assert submitted.json()["has_review_history"] is True
     assert approver.get("/api/approvals").json()[0]["has_review_history"] is True
@@ -360,19 +461,19 @@ def test_approver_retains_reviewed_correction_visibility(client: TestClient, app
 def test_invalid_transitions_stale_versions_and_review_validation_do_not_mutate(client: TestClient, approver: TestClient) -> None:
     created = create_claim(client).json()
     claim_id = created["id"]
-    assert submit_claim(client, claim_id, 1).status_code == 200
+    assert submit_claim(client, claim_id, attach_receipt(client, claim_id, 1)).status_code == 200
     assert submit_claim(client, claim_id, 1).status_code == 409
-    assert submit_claim(client, claim_id, 2).status_code == 409
+    assert submit_claim(client, claim_id, 3).status_code == 409
     assert review_claim(
-        approver, claim_id, {"version": 2, "decision": "APPROVED", "approved_amount_paise": 13000}
+        approver, claim_id, {"version": 3, "decision": "APPROVED", "approved_amount_paise": 13000}
     ).status_code == 422
     assert approver.post(
-        f"/api/claims/{claim_id}/pay", json={"version": 2}
+        f"/api/claims/{claim_id}/pay", json={"version": 3}
     ).status_code == 409
 
     detail = client.get(f"/api/claims/{claim_id}").json()
-    assert (detail["status"], detail["version"]) == ("SUBMITTED", 2)
-    assert [event["action"] for event in detail["history"]] == ["CREATED", "SUBMITTED"]
+    assert (detail["status"], detail["version"]) == ("SUBMITTED", 3)
+    assert [event["action"] for event in detail["history"]] == ["CREATED", "RECEIPT_ATTACHED", "SUBMITTED"]
 
 
 def test_only_owner_can_edit_or_delete_draft_and_delete_cascades_history(client: TestClient, approver: TestClient) -> None:
@@ -412,32 +513,32 @@ def test_foreign_owner_claim_is_private_and_immutable(application, client):
 @pytest.mark.parametrize(
     "body",
     [
-        {"version": 2, "decision": "APPROVED", "approved_amount_paise": 5000},
-        {"version": 2, "decision": "REJECTED"},
-        {"version": 2, "decision": "REJECTED", "approved_amount_paise": 5000, "comment": "No"},
-        {"version": 2, "decision": "APPROVED", "approved_amount_paise": 0},
-        {"version": 2, "decision": "APPROVED", "approved_amount_paise": True},
+        {"version": 3, "decision": "APPROVED", "approved_amount_paise": 5000},
+        {"version": 3, "decision": "REJECTED"},
+        {"version": 3, "decision": "REJECTED", "approved_amount_paise": 5000, "comment": "No"},
+        {"version": 3, "decision": "APPROVED", "approved_amount_paise": 0},
+        {"version": 3, "decision": "APPROVED", "approved_amount_paise": True},
     ],
 )
 def test_review_requires_valid_decision_amount_and_comment(client: TestClient, approver: TestClient, body) -> None:
     claim = create_claim(client).json()
-    submit_claim(client, claim["id"], 1)
+    submit_claim(client, claim["id"], attach_receipt(client, claim["id"], 1))
     assert review_claim(approver, claim["id"], body).status_code == 422
 
 
 def test_parallel_review_has_one_winner_and_one_event(client: TestClient, approver: TestClient) -> None:
     claim = create_claim(client).json()
     claim_id = claim["id"]
-    assert submit_claim(client, claim_id, 1).status_code == 200
-    review_body = {"version": 2, "decision": "APPROVED", "approved_amount_paise": 12500}
+    assert submit_claim(client, claim_id, attach_receipt(client, claim_id, 1)).status_code == 200
+    review_body = {"version": 3, "decision": "APPROVED", "approved_amount_paise": 12500}
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         responses = list(pool.map(lambda _: review_claim(approver, claim_id, review_body), range(2)))
 
     assert sorted(response.status_code for response in responses) == [200, 409]
     detail = client.get(f"/api/claims/{claim_id}").json()
-    assert (detail["status"], detail["version"]) == ("APPROVED", 3)
-    assert [event["action"] for event in detail["history"]] == ["CREATED", "SUBMITTED", "APPROVED"]
+    assert (detail["status"], detail["version"]) == ("APPROVED", 4)
+    assert [event["action"] for event in detail["history"]] == ["CREATED", "RECEIPT_ATTACHED", "SUBMITTED", "APPROVED"]
 
 
 def test_sqlite_claim_persists_after_app_reopen(tmp_path) -> None:
@@ -477,7 +578,7 @@ def test_initialization_preserves_existing_non_login_user(tmp_path):
 
 def test_workspace_lists_and_permissions(client, approver):
     claim = create_claim(client).json()
-    assert submit_claim(client, claim["id"], 1).status_code == 200
+    assert submit_claim(client, claim["id"], attach_receipt(client, claim["id"], 1)).status_code == 200
     assert approver.get("/api/claims").json() == []
     assert client.get("/api/approvals").status_code == 403
     assert approver.get("/api/approvals").json()[0]["allowed_actions"] == ["review"]
@@ -491,9 +592,9 @@ def test_workspace_queue_order_privacy_and_payload_ownership(application, client
     first = create_claim(client).json()
     second = create_claim(client).json()
     own = create_claim(approver).json()
-    assert submit_claim(client, first["id"], 1).status_code == 200
-    assert submit_claim(client, second["id"], 1).status_code == 200
-    assert submit_claim(approver, own["id"], 1).status_code == 200
+    assert submit_claim(client, first["id"], attach_receipt(client, first["id"], 1)).status_code == 200
+    assert submit_claim(client, second["id"], attach_receipt(client, second["id"], 1)).status_code == 200
+    assert submit_claim(approver, own["id"], attach_receipt(approver, own["id"], 1)).status_code == 200
     assert [row["id"] for row in approver.get("/api/approvals").json()] == [second["id"], first["id"]]
     assert [row["id"] for row in approver.get("/api/claims?role=employee").json()] == [own["id"]]
     assert approver.get(f"/api/claims/{private['id']}").status_code == 404
@@ -525,33 +626,33 @@ def test_workspace_claimant_lifecycle(request, claimant_fixture, application, mo
         assert edit_response.status_code == 200
         edited = edit_response.json()
         assert edited["allowed_actions"] == ["edit", "delete", "submit"]
-        submitted = submit_claim(claimant, claim_id, 2).json()
+        submitted = submit_claim(claimant, claim_id, attach_receipt(claimant, claim_id, edited["version"])).json()
         assert submitted["allowed_actions"] == []
         assert reviewer.get("/api/approvals").json()[0]["allowed_actions"] == ["review"]
         if claimant_fixture == "approver":
             before = claimant.get(f"/api/claims/{claim_id}").json()
-            for body in ({"version": 3, "decision": "APPROVED", "approved_amount_paise": 12500},
-                         {"version": 3, "decision": "REJECTED", "comment": "No"}):
+            for body in ({"version": 4, "decision": "APPROVED", "approved_amount_paise": 12500},
+                         {"version": 4, "decision": "REJECTED", "comment": "No"}):
                 assert review_claim(claimant, claim_id, body).status_code == 403
                 assert claimant.get(f"/api/claims/{claim_id}").json() == before
             assert claimant.get("/api/approvals").json() == []
-        rejected = review_claim(reviewer, claim_id, {"version": 3, "decision": "REJECTED", "comment": "Fix"}).json()
+        rejected = review_claim(reviewer, claim_id, {"version": 4, "decision": "REJECTED", "comment": "Fix"}).json()
         assert rejected["allowed_actions"] == []
         assert claimant.get(f"/api/claims/{claim_id}").json()["allowed_actions"] == ["edit", "submit"]
-        corrected = claimant.patch(f"/api/claims/{claim_id}", json={**claim_payload(), "version": 4}).json()
+        corrected = claimant.patch(f"/api/claims/{claim_id}", json={**claim_payload(), "version": 5}).json()
         assert corrected["allowed_actions"] == ["edit", "submit"]
-        assert claimant.delete(f"/api/claims/{claim_id}?version=5").status_code == 409
+        assert claimant.delete(f"/api/claims/{claim_id}?version=6").status_code == 409
         assert reviewer.get("/api/approvals").json()[0]["allowed_actions"] == []
         assert reviewer.get(f"/api/claims/{claim_id}").json()["has_review_history"] is True
-        assert submit_claim(claimant, claim_id, 5).status_code == 200
-        approved = review_claim(reviewer, claim_id, {"version": 6, "decision": "APPROVED", "approved_amount_paise": 12500}).json()
+        assert submit_claim(claimant, claim_id, 6).status_code == 200
+        approved = review_claim(reviewer, claim_id, {"version": 7, "decision": "APPROVED", "approved_amount_paise": 12500}).json()
         assert approved["allowed_actions"] == ["pay"]
         if claimant_fixture == "approver":
             before = claimant.get(f"/api/claims/{claim_id}").json()
             assert before["allowed_actions"] == []
-            assert claimant.post(f"/api/claims/{claim_id}/pay", json={"version": 7}).status_code == 403
+            assert claimant.post(f"/api/claims/{claim_id}/pay", json={"version": 8}).status_code == 403
             assert claimant.get(f"/api/claims/{claim_id}").json() == before
-        paid = reviewer.post(f"/api/claims/{claim_id}/pay", json={"version": 7}).json()
+        paid = reviewer.post(f"/api/claims/{claim_id}/pay", json={"version": 8}).json()
         assert paid["status"] == "PAID" and paid["allowed_actions"] == []
         assert [e["action"] for e in claimant.get(f"/api/claims/{claim_id}").json()["history"]] == [
-            "CREATED", "EDITED", "SUBMITTED", "REJECTED", "EDITED", "SUBMITTED", "APPROVED", "PAID"]
+            "CREATED", "EDITED", "RECEIPT_ATTACHED", "SUBMITTED", "REJECTED", "EDITED", "SUBMITTED", "APPROVED", "PAID"]

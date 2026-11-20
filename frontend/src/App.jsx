@@ -24,6 +24,40 @@ const STATUS_LABELS = {
   REJECTED: 'Rejected',
   PAID: 'Paid',
 };
+const CATEGORIES = { 'travel and stay': 'Travel and Stay', meals: 'Meals', 'work & tech': 'Work & Tech', others: 'Others' };
+const categoryLabel = (value) => Object.hasOwn(CATEGORIES, value) ? CATEGORIES[value] : value;
+const isDateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value || '');
+function parseLocalInput(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$/.exec(value || '');
+  if (!match) return null;
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText = '0', fraction = ''] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const millisecond = Number((fraction + '000').slice(0, 3));
+  const date = new Date(0);
+  date.setFullYear(year, month - 1, day);
+  date.setHours(hour, minute, second, millisecond);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day || date.getHours() !== hour || date.getMinutes() !== minute || date.getSeconds() !== second || date.getMilliseconds() !== millisecond) return null;
+  return date;
+}
+function formatLocalDateTime(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${String(date.getMilliseconds()).padStart(3, '0')}`;
+}
+function localWallKey(value) {
+  const date = parseLocalInput(value);
+  return date ? formatLocalDateTime(date) : '';
+}
+function localInput(value) {
+  if (!value || isDateOnly(value)) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return formatLocalDateTime(date);
+}
 
 const ACTION_LABELS = {
   CREATED: 'Draft created',
@@ -40,7 +74,7 @@ const ACTION_LABELS = {
 function apiErrorMessage(payload) {
   const detail = payload?.detail ?? payload?.message;
   if (Array.isArray(detail)) {
-    return detail.map((entry) => entry?.msg || JSON.stringify(entry)).join(' · ');
+    return detail.map((entry) => typeof entry === 'string' ? entry : entry?.msg || JSON.stringify(entry)).join(' · ');
   }
   if (typeof detail === 'string') return detail;
   return 'The request could not be completed. Please try again.';
@@ -94,7 +128,10 @@ function rupeesInput(paise) {
 
 function dateLabel(value) {
   if (!value) return '—';
-  return new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium' }).format(new Date(`${value}T00:00:00`));
+  if (isDateOnly(value)) return `${value} · time not recorded`;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return `${new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium', timeStyle: 'medium' }).format(date)} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`;
 }
 
 function timeLabel(value) {
@@ -126,11 +163,16 @@ function ClaimForm({ values, onChange, onSubmit, onCancel, submitLabel, error, b
       </label>
       <label>
         Category
-        <input maxLength="80" name="category" value={values.category} onChange={update('category')} required />
+        <select name="category" value={values.category} onChange={update('category')} required>
+          <option value="">Choose a category</option>
+          {Object.entries(CATEGORIES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        {values.originalCategory && <span className="label-help">Original category: {values.originalCategory}. Choose a current category.</span>}
       </label>
       <label>
-        Expense date
-        <input type="date" name="expense_date" max={todayString()} value={values.expense_date} onChange={update('expense_date')} required />
+        Expense date and time
+        <input type="datetime-local" step="0.001" name="expense_date" value={values.expense_date} onChange={update('expense_date')} required />
+        {values.originalDate && <span className="label-help">Original date: {values.originalDate}; time was not recorded. Enter a time.</span>}
       </label>
       <label>
         Requested amount (₹)
@@ -182,7 +224,7 @@ function History({ events, claimId }) {
                 </div>
                 <p className="event-actor">{event.actor_name}</p>
                 <p className="event-expense">
-                  {event.title} · {event.category} · {dateLabel(event.expense_date)} · Requested {formatRupees(event.amount_paise)}
+                  {event.title} · {categoryLabel(event.category)} · {dateLabel(event.expense_date)} · Requested {formatRupees(event.amount_paise)}
                   {event.approved_amount_paise !== null && event.approved_amount_paise !== undefined && (
                     <> · Approved {formatRupees(event.approved_amount_paise)}</>
                   )}
@@ -364,7 +406,7 @@ export default function App() {
     setConflictNotice('');
     setDetailError('');
     setFormError('');
-    setFormValues({ title: '', merchant: '', description: '', category: '', expense_date: todayString(), amount: '' });
+    setFormValues({ title: '', merchant: '', description: '', category: '', expense_date: '', amount: '' });
     setFormMode('create');
   }
 
@@ -373,12 +415,17 @@ export default function App() {
     setNotice('');
     setDetailError('');
     setFormError('');
+    const hasCurrentCategory = Object.hasOwn(CATEGORIES, currentDetail.category);
     setFormValues({
       title: currentDetail.title,
       merchant: currentDetail.merchant || '',
       description: currentDetail.description,
-      category: currentDetail.category,
-      expense_date: currentDetail.expense_date,
+      category: hasCurrentCategory ? currentDetail.category : '',
+      originalCategory: hasCurrentCategory ? '' : currentDetail.category,
+      expense_date: localInput(currentDetail.expense_date),
+      originalInput: localInput(currentDetail.expense_date),
+      originalInstant: isDateOnly(currentDetail.expense_date) ? '' : currentDetail.expense_date,
+      originalDate: isDateOnly(currentDetail.expense_date) ? currentDetail.expense_date : '',
       amount: rupeesInput(currentDetail.amount_paise),
     });
     setFormMode('edit');
@@ -399,13 +446,16 @@ export default function App() {
       if (formValues.title.trim().length === 0 || formValues.category.trim().length === 0 || formValues.description.trim().length === 0) {
         throw new Error('Enter a title, category, and description.');
       }
-      if (!formValues.expense_date || formValues.expense_date > todayString()) throw new Error('Choose a valid expense date that is not in the future.');
+      const instant = parseLocalInput(formValues.expense_date);
+      if (!instant || instant > new Date()) throw new Error('Choose a valid expense date and time that is not in the future.');
+      const inputWallTime = localWallKey(formValues.expense_date);
+      const originalWallTime = localWallKey(formValues.originalInput);
       payload = {
         title: formValues.title,
         merchant: formValues.merchant,
         description: formValues.description,
         category: formValues.category,
-        expense_date: formValues.expense_date,
+        expense_date: formValues.originalInstant && inputWallTime && inputWallTime === originalWallTime ? formValues.originalInstant : instant.toISOString(),
         amount_paise,
       };
     } catch (error) {
@@ -446,6 +496,7 @@ export default function App() {
 
   function openConfirmation(type, event) {
     if (!currentDetail || authBusy || pendingMutation || confirmationRef.current) return;
+    if (type === 'submit' && (currentDetail.submission_errors || []).length) return;
     const snapshot = {
       type, id: currentDetail.id, version: currentDetail.version, title: currentDetail.title,
       filename: currentDetail.receipt?.filename,
@@ -711,7 +762,7 @@ export default function App() {
                               setDetailError('');
                             }}
                           >
-                            <span>{claim.title}</span><small>{claim.category} · {dateLabel(claim.expense_date)}</small>
+                            <span>{claim.title}</span><small>{categoryLabel(claim.category)} · {dateLabel(claim.expense_date)}</small>
                           </button>
                         </td>
                         <td>{claim.owner_name}</td>
@@ -769,8 +820,8 @@ export default function App() {
                 {hasPartialApproval && <p className="partial-label">Partial approval · {formatRupees(currentDetail.approved_amount_paise)} approved of {formatRupees(currentDetail.amount_paise)} requested.</p>}
 
                 <dl className="claim-facts">
-                  <div><dt>Category</dt><dd>{currentDetail.category}</dd></div>
-                  <div><dt>Expense date</dt><dd>{dateLabel(currentDetail.expense_date)}</dd></div>
+                  <div><dt>Category</dt><dd>{categoryLabel(currentDetail.category)}</dd></div>
+                  <div><dt>Expense date and time</dt><dd>{dateLabel(currentDetail.expense_date)}</dd></div>
                   <div><dt>Merchant</dt><dd>{currentDetail.merchant || 'Not provided'}</dd></div>
                   <div className="description-fact"><dt>Business purpose / expense details</dt><dd>{currentDetail.description}</dd></div>
                 </dl>
@@ -812,11 +863,12 @@ export default function App() {
 
                 {(actions.includes('submit') || actions.includes('edit') || actions.includes('delete')) && (
                   <div className="employee-actions">
-                    {actions.includes('submit') && <button className="button button-primary" type="button" onClick={(event) => openConfirmation('submit', event)} disabled={authBusy || Boolean(pendingMutation)}>{pendingMutation === 'Submitting claim' ? 'Submitting…' : 'Submit claim'}</button>}
+                    {actions.includes('submit') && <button className="button button-primary" type="button" onClick={(event) => openConfirmation('submit', event)} disabled={authBusy || Boolean(pendingMutation) || (currentDetail.submission_errors || []).length > 0}>{pendingMutation === 'Submitting claim' ? 'Submitting…' : 'Submit claim'}</button>}
                     {actions.includes('edit') && <button className="button button-secondary" type="button" onClick={startEditingClaim} disabled={authBusy || Boolean(pendingMutation)}>{currentDetail.status === 'REJECTED' ? 'Edit correction' : 'Edit draft'}</button>}
                     {actions.includes('delete') && <button className="button button-danger-text" type="button" onClick={(event) => openConfirmation('delete', event)} disabled={authBusy || Boolean(pendingMutation)}>{pendingMutation === 'Deleting draft' ? 'Deleting…' : 'Delete draft'}</button>}
                   </div>
                 )}
+                {actions.includes('submit') && (currentDetail.submission_errors || []).map((message) => <p className="readonly-hint" key={message}>{message}</p>)}
                 {actions.includes('submit') && currentDetail.status === 'DRAFT' && <p className="readonly-hint">Once submitted, this claim is locked while it is under review.</p>}
                 <History events={currentDetail.history || []} claimId={currentDetail.id} />
               </article>

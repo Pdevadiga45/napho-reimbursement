@@ -9,7 +9,7 @@ from pathlib import PurePath
 from PIL import Image, UnidentifiedImageError
 from pypdf import PdfReader
 
-MAX_BYTES = 5 * 1024 * 1024
+MAX_BYTES = 5_000_000
 MAX_PIXELS = 20_000_000
 
 
