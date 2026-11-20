@@ -576,14 +576,6 @@ def test_initialization_preserves_existing_non_login_user(tmp_path):
         assert browser.post("/api/auth/login", json={"username": "Legacy employee", "password": "employee123"}).status_code == 401
 
 
-def test_workspace_lists_and_permissions(client, approver):
-    claim = create_claim(client).json()
-    assert submit_claim(client, claim["id"], attach_receipt(client, claim["id"], 1)).status_code == 200
-    assert approver.get("/api/claims").json() == []
-    assert client.get("/api/approvals").status_code == 403
-    assert approver.get("/api/approvals").json()[0]["allowed_actions"] == ["review"]
-
-
 def test_workspace_queue_order_privacy_and_payload_ownership(application, client, approver):
     with TestClient(application) as anonymous:
         assert anonymous.get("/api/approvals").status_code == 401
@@ -591,11 +583,18 @@ def test_workspace_queue_order_privacy_and_payload_ownership(application, client
     private = create_claim(client).json()
     first = create_claim(client).json()
     second = create_claim(client).json()
+    own_list = approver.get("/api/claims")
+    assert own_list.status_code == 200
+    assert own_list.json() == []
+    assert client.get("/api/approvals").status_code == 403
     own = create_claim(approver).json()
     assert submit_claim(client, first["id"], attach_receipt(client, first["id"], 1)).status_code == 200
     assert submit_claim(client, second["id"], attach_receipt(client, second["id"], 1)).status_code == 200
     assert submit_claim(approver, own["id"], attach_receipt(approver, own["id"], 1)).status_code == 200
-    assert [row["id"] for row in approver.get("/api/approvals").json()] == [second["id"], first["id"]]
+    queue = approver.get("/api/approvals")
+    assert queue.status_code == 200
+    assert [row["id"] for row in queue.json()] == [second["id"], first["id"]]
+    assert queue.json()[0]["allowed_actions"] == ["review"]
     assert [row["id"] for row in approver.get("/api/claims?role=employee").json()] == [own["id"]]
     assert approver.get(f"/api/claims/{private['id']}").status_code == 404
 

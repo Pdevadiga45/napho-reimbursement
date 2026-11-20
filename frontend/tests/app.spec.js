@@ -2,24 +2,6 @@ import { test, expect, request } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { formatRupees, parseRupees } from '../src/money.js';
 
-test('category and expense time controls enforce current contract', async ({ page }) => {
-  await page.goto('/');
-  await signIn(page, 'employee');
-  await page.getByRole('button', { name: 'New claim' }).click();
-  await expect(page.getByLabel('Category')).toHaveJSProperty('tagName', 'SELECT');
-  await expect(page.getByLabel('Category').locator('option')).toHaveText(['Choose a category', 'Travel and Stay', 'Meals', 'Work & Tech', 'Others']);
-  expect(await page.getByLabel('Category').locator('option').evaluateAll((options) => options.map((option) => option.value))).toEqual(['', 'travel and stay', 'meals', 'work & tech', 'others']);
-});
-
-test('expense time control is required', async ({ page }) => {
-  await page.goto('/');
-  await signIn(page, 'employee');
-  await page.getByRole('button', { name: 'New claim' }).click();
-  await expect(page.getByLabel('Expense date and time')).toHaveAttribute('type', 'datetime-local');
-  await expect(page.getByLabel('Expense date and time')).toHaveAttribute('step', '60');
-  await expect(page.getByLabel('Expense date and time')).toHaveAttribute('required', '');
-});
-
 test('workspace chrome keeps navigation and actions in context', async ({ page }) => {
   await page.goto('/');
   await signIn(page, 'employee');
@@ -1000,6 +982,12 @@ test('upfront receipt submission validates before mutation and retries upload', 
   await page.goto('/');
   await signIn(page, 'employee');
   await page.getByRole('button', { name: 'New claim' }).click();
+  await expect(page.getByLabel('Category')).toHaveJSProperty('tagName', 'SELECT');
+  await expect(page.getByLabel('Category').locator('option')).toHaveText(['Choose a category', 'Travel and Stay', 'Meals', 'Work & Tech', 'Others']);
+  expect(await page.getByLabel('Category').locator('option').evaluateAll((options) => options.map((option) => option.value))).toEqual(['', 'travel and stay', 'meals', 'work & tech', 'others']);
+  await expect(page.getByLabel('Expense date and time')).toHaveAttribute('type', 'datetime-local');
+  await expect(page.getByLabel('Expense date and time')).toHaveAttribute('step', '60');
+  await expect(page.getByLabel('Expense date and time')).toHaveAttribute('required', '');
   expect(await page.locator('.claim-form').evaluate(form => {
     const fields = [...form.querySelectorAll('select, input')];
     return fields.findIndex(field => field.type === 'file') === fields.findIndex(field => field.name === 'category') + 1
