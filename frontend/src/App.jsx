@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { formatRupees, parseRupees } from './money.js';
 import ConfirmDialog from './ConfirmDialog.jsx';
-import ReceiptPanel, { ReceiptPicker } from './ReceiptPanel.jsx';
+import ReceiptPanel, { ReceiptDemoStatus, ReceiptPicker } from './ReceiptPanel.jsx';
 
 const FILTERS = [
   { id: 'ALL', label: 'All claims' },
@@ -959,6 +959,9 @@ export default function App() {
                 </dl>
 
                 <ReceiptPanel key={`${scopeKey}:${currentDetail.id}:${currentDetail.version}`} claim={currentDetail} editable={actions.includes('edit')} busy={authBusy || Boolean(pendingMutation)} onRemove={(event) => openConfirmation('removeReceipt', event)} />
+                {canReview && workspace === 'approvals' && currentDetail.owner_id !== userId && (
+                  <ReceiptDemoStatus receipt={currentDetail.receipt} amountPaise={currentDetail.amount_paise} />
+                )}
 
                 {detailError && !formMode && <div className="banner banner-error detail-banner" role="alert">{detailError}</div>}
 

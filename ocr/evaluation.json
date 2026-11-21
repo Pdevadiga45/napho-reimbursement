@@ -1,0 +1,112 @@
+{
+  "run_kind": "Historical v2 end-to-end CLI run after tuning on this cohort",
+  "selector_sha256": "42d408ebe65c592b366e0958a0d5cd7dc53789a52d702ea269359b80c16e76cd",
+  "threshold": 0.9,
+  "timeout_seconds": 90,
+  "complete_receipts": 10,
+  "counts": {
+    "exact": 5,
+    "wrong": 0,
+    "unverified": 5,
+    "missing_page_controls_unverified": 2
+  },
+  "median_complete_wall_seconds": 15.5275,
+  "cases": [
+    {
+      "case": "case-01",
+      "input_kind": "complete receipt",
+      "outcome": "unverified",
+      "reason": "no_final_evidence",
+      "exit_code": 0,
+      "wall_seconds": 24.867
+    },
+    {
+      "case": "case-02",
+      "input_kind": "complete receipt",
+      "outcome": "unverified",
+      "reason": "no_final_evidence",
+      "exit_code": 0,
+      "wall_seconds": 7.18
+    },
+    {
+      "case": "case-03",
+      "input_kind": "complete receipt",
+      "outcome": "unverified",
+      "reason": "no_final_evidence",
+      "exit_code": 0,
+      "wall_seconds": 22.156
+    },
+    {
+      "case": "case-04",
+      "input_kind": "complete receipt",
+      "outcome": "unverified",
+      "reason": "no_final_evidence",
+      "exit_code": 0,
+      "wall_seconds": 22.659
+    },
+    {
+      "case": "case-05",
+      "input_kind": "complete receipt",
+      "outcome": "exact",
+      "reason": "verified",
+      "exit_code": 0,
+      "wall_seconds": 21.432
+    },
+    {
+      "case": "case-06",
+      "input_kind": "complete receipt",
+      "outcome": "exact",
+      "reason": "verified",
+      "exit_code": 0,
+      "wall_seconds": 32.695
+    },
+    {
+      "case": "case-07",
+      "input_kind": "complete receipt",
+      "outcome": "exact",
+      "reason": "verified",
+      "exit_code": 0,
+      "wall_seconds": 4.378
+    },
+    {
+      "case": "case-08",
+      "input_kind": "complete receipt",
+      "outcome": "exact",
+      "reason": "verified",
+      "exit_code": 0,
+      "wall_seconds": 3.713
+    },
+    {
+      "case": "case-09",
+      "input_kind": "complete receipt",
+      "outcome": "unverified",
+      "reason": "no_final_evidence",
+      "exit_code": 0,
+      "wall_seconds": 9.623
+    },
+    {
+      "case": "case-10",
+      "input_kind": "complete receipt",
+      "outcome": "exact",
+      "reason": "verified",
+      "exit_code": 0,
+      "wall_seconds": 3.723
+    },
+    {
+      "case": "case-11",
+      "input_kind": "missing-final-page control",
+      "outcome": "control_unverified",
+      "reason": "no_final_evidence",
+      "exit_code": 0,
+      "wall_seconds": 33.387
+    },
+    {
+      "case": "case-12",
+      "input_kind": "missing-final-page control",
+      "outcome": "control_unverified",
+      "reason": "no_final_evidence",
+      "exit_code": 0,
+      "wall_seconds": 32.446
+    }
+  ]
+}

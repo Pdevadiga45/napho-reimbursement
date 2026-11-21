@@ -2,9 +2,16 @@
 
 A React and Python application for creating, reviewing and tracking expense claims.
 
-## Setup
+## Run locally
 
-Requires Python 3.14+, [uv](https://docs.astral.sh/uv/), and Node.js 22.12+ with npm. From the repository root, start each service in a separate terminal.
+**Prerequisites:** Git, Python 3.14+, [uv](https://docs.astral.sh/uv/), and Node.js 22.12+ with npm. You don't need a database server, `.env` file, API keys, or GPU.
+
+```sh
+git clone https://github.com/Pdevadiga45/napho-reimbursement.git
+cd napho-reimbursement
+```
+
+**Terminal 1 — backend** (from the repository root):
 
 ```sh
 cd backend
@@ -12,22 +19,22 @@ uv sync --locked
 uv run uvicorn app:app --reload --host 127.0.0.1 --port 8000
 ```
 
+**Terminal 2 — frontend** (open a new terminal at the repository root):
+
 ```sh
 cd frontend
 npm ci
-npm run dev -- --host 127.0.0.1
+npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
 ```
 
-Open http://127.0.0.1:5173. API documentation is available at http://127.0.0.1:8000/docs.
+Keep both terminals running and open [the app](http://127.0.0.1:5173). Vite forwards `/api` requests to the backend on port 8000. To check that the backend is up, open [the API docs](http://127.0.0.1:8000/docs). If a port is already in use, stop the process using it or choose another port. If you change the backend port, set `NAPHO_API_TARGET` to the new backend URL before starting Vite.
 
-Add an optional merchant and choose a receipt when creating or editing a claim. A receipt is required before submission or resubmission, but not to save a draft. Owners can attach, replace or remove it while the claim is editable. PNG, JPG, JPEG and PDF files are supported up to 5 MB (5,000,000 bytes), with images limited to 20 megapixels and unencrypted PDFs to 10 pages. Submitted claims show the receipt to authorized reviewers. If an upload fails after saving, the form retains the saved draft for retry.
-
-| Account | Username | Password |
+| Local demo account | Username | Password |
 | --- | --- | --- |
 | Employee One | `employee` | `employee123` |
 | Manager One | `manager` | `manager123` |
 
-Startup creates the schema and mock accounts. Data persists in `backend/napho.sqlite3`; set `NAPHO_DB_PATH` to use another location. Claims are not preloaded in a fresh checkout.
+Startup creates `backend/napho.sqlite3` and both mock accounts automatically. Claims and attachments persist there across restarts; a fresh checkout has no claims. Set `NAPHO_DB_PATH` before starting the backend to use a separate database file. These accounts are for local development; don't expose the dev servers publicly.
 
 ## Structure
 
@@ -72,8 +79,16 @@ npm run build
 
 API tests cover lifecycle transitions, ownership, amounts, history, duplicate requests and concurrent reviews. Frontend tests cover the user workflows, permissions, confirmations, session handling and responsive layout. Playwright uses separate test servers and an isolated database, not the local showcase data.
 
+## Receipt OCR prototype
+
+[Run RapidOCR locally](ocr/README.md) as a separate CPU-only command-line tool for JPEG/PNG receipts. It is not wired into the claims app and cannot approve or reject a claim. The [evaluation](ocr/EVALUATION.md) reports every case in the small development run: **5 exact INR final totals, 0 wrong totals accepted, and 5 unverified** across 10 complete receipts. Both missing-final-page controls were also unverified.
+
+For the local reviewer-only badge demo, copy `frontend/.env.example` to `frontend/.env.local` and restart Vite. The only bundled receipt that activates the recorded result is [the redacted ₹777.00 sample](ocr/examples/demo-receipt.png), matched by file contents, not its name. The badge appears in **Approvals** only and is explicitly labeled **Recorded OCR result · no live OCR**. Requests at or below the recorded total are covered; only requests above it are flagged. This demo is disabled in production builds.
+
 ## Known limitations
 
+- OCR was evaluated on a small set of scanned and photographed paper receipts. It was not validated on a diverse set of 100–150+ digital and physical receipts or load-tested for throughput and scalability. The five exact matches do not establish production reliability.
+- A next step would be to label 200+ diverse receipts and train an XGBoost ranker to pick the final payable amount from the candidates RapidOCR reads. No ranker was trained. It would need evaluation on a separate test set split by merchant or layout.
 - SQLite permits one writer at a time. Concurrent writes are handled safely, but contention can return a retryable conflict. High-concurrency performance has not been load-tested.
 
 OpenAI Codex was used to assist with implementation and unit tests.
