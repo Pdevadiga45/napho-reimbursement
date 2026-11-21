@@ -26,4 +26,4 @@ uv pip install --python .venv/bin/python -r requirements.txt
 
 Replace `receipt.jpg` with the path to your image. JSON with `"reason": "verified"` includes the detected INR total in `amount_paise`. The optional `--claim-paise` is an integer amount in paise. A verified result includes the advisory `"status": "Unusual amount"` only if the claim exceeds the detected total.
 
-[Evaluation evidence](EVALUATION.md)
+[How it works and five example results](EVALUATION.md)

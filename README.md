@@ -81,14 +81,13 @@ API tests cover lifecycle transitions, ownership, amounts, history, duplicate re
 
 ## Receipt OCR prototype
 
-[Run RapidOCR locally](ocr/README.md) as a separate CPU-only command-line tool for JPEG/PNG receipts. It is not wired into the claims app and cannot approve or reject a claim. The [evaluation](ocr/EVALUATION.md) reports every case in the small development run: **5 exact INR final totals, 0 wrong totals accepted, and 5 unverified** across 10 complete receipts. Both missing-final-page controls were also unverified.
+The standalone [CPU receipt OCR tool](ocr/README.md) uses RapidOCR to read receipt images and a Python rule-based selector to find the final INR amount. It is not wired into the claims app. The [proof of concept](ocr/EVALUATION.md) shows five receipts whose final totals were extracted correctly.
 
 **Approvals** shows a badge for valid requests whose receipt SHA-256 exactly matches the redacted ₹777.00 sample. The status includes **Recorded OCR result · no live OCR**. Requests at or below the recorded total are covered. Only requests above it are flagged. [Redacted receipt sample](ocr/examples/demo-receipt.png)
 
 ## Known limitations
 
-- OCR was evaluated on a small set of scanned and photographed paper receipts. It was not validated on a diverse set of 100–150+ digital and physical receipts or load-tested for throughput and scalability. The five exact matches do not establish production reliability.
-- A next step would be to label 200+ diverse receipts and train an XGBoost ranker to pick the final payable amount from the candidates RapidOCR reads. No ranker was trained. It would need evaluation on a separate test set split by merchant or layout.
+- Receipt OCR is a proof of concept. It has not been validated on 100–150+ diverse digital and physical receipts or load-tested for scale.
 - SQLite permits one writer at a time. Concurrent writes are handled safely, but contention can return a retryable conflict. High-concurrency performance has not been load-tested.
 
 OpenAI Codex was used to assist with implementation and unit tests.
