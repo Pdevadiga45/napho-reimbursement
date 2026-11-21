@@ -1,26 +1,19 @@
 import { useState } from 'react';
 import { formatRupees } from './money.js';
-import { getReceiptDemoFixture, receiptDemoStatus } from './receiptDemo.js';
-
-const demoFixture = import.meta.env.DEV && getReceiptDemoFixture({
-  DEV: import.meta.env.DEV,
-  VITE_RECEIPT_DEMO_ENABLED: import.meta.env.VITE_RECEIPT_DEMO_ENABLED,
-  VITE_RECEIPT_DEMO_SHA256: import.meta.env.VITE_RECEIPT_DEMO_SHA256,
-  VITE_RECEIPT_DEMO_TOTAL_PAISE: import.meta.env.VITE_RECEIPT_DEMO_TOTAL_PAISE,
-});
+import { RECORDED_TOTAL_PAISE, receiptDemoStatus } from './receiptDemo.js';
 
 export function ReceiptDemoStatus({ receipt, amountPaise }) {
-  const status = receiptDemoStatus(demoFixture, receipt, amountPaise);
+  const status = receiptDemoStatus(receipt, amountPaise);
   if (!status) return null;
 
   return <div className="receipt-demo" role="status" aria-atomic="true">
     <strong className={`receipt-demo-badge receipt-demo-${status.kind}`}>{status.label}</strong>
     <small>Recorded OCR result · no live OCR</small>
     {status.kind === 'anomaly' && <p>
-      The requested amount is {formatRupees(status.differencePaise)} above the recorded total of {formatRupees(demoFixture.totalPaise)}.
+      The requested amount is {formatRupees(status.differencePaise)} above the recorded total of {formatRupees(RECORDED_TOTAL_PAISE)}.
     </p>}
     {status.belowTotal && <p>
-      The requested amount is below the recorded total of {formatRupees(demoFixture.totalPaise)} and is covered by the receipt.
+      The requested amount is below the recorded total of {formatRupees(RECORDED_TOTAL_PAISE)} and is covered by the receipt.
     </p>}
   </div>;
 }

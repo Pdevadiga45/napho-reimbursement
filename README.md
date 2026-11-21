@@ -83,7 +83,7 @@ API tests cover lifecycle transitions, ownership, amounts, history, duplicate re
 
 [Run RapidOCR locally](ocr/README.md) as a separate CPU-only command-line tool for JPEG/PNG receipts. It is not wired into the claims app and cannot approve or reject a claim. The [evaluation](ocr/EVALUATION.md) reports every case in the small development run: **5 exact INR final totals, 0 wrong totals accepted, and 5 unverified** across 10 complete receipts. Both missing-final-page controls were also unverified.
 
-For the local reviewer-only badge demo, copy `frontend/.env.example` to `frontend/.env.local` and restart Vite. The only bundled receipt that activates the recorded result is [the redacted ₹777.00 sample](ocr/examples/demo-receipt.png), matched by file contents, not its name. The badge appears in **Approvals** only and is explicitly labeled **Recorded OCR result · no live OCR**. Requests at or below the recorded total are covered; only requests above it are flagged. This demo is disabled in production builds.
+**Approvals** shows a badge for valid requests whose receipt SHA-256 exactly matches the redacted ₹777.00 sample. The status includes **Recorded OCR result · no live OCR**. Requests at or below the recorded total are covered. Only requests above it are flagged. [Redacted receipt sample](ocr/examples/demo-receipt.png)
 
 ## Known limitations
 

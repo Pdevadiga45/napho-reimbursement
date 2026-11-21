@@ -20,4 +20,4 @@ The [redacted receipt example](examples/demo-receipt.png) is separate from the 1
 python word_total.py examples/demo-receipt.png --timeout 90
 ```
 
-Use the Python executable from the [setup instructions](README.md). The visible ground truth is ₹777.00. The packaged RapidOCR CLI returned `reason: verified`, `currency: INR`, and `amount_paise: 77700` on that exact PNG. The optional web demo uses this recorded result, not a live OCR call. The benchmark originals are not included because redistribution permission was not confirmed for all source images.
+Use the Python executable from the [setup instructions](README.md). The visible ground truth is ₹777.00. The packaged RapidOCR CLI returned `reason: verified`, `currency: INR`, and `amount_paise: 77700` on that exact PNG. Approvals shows this recorded result for valid requests with the same receipt SHA-256 and displays **Recorded OCR result · no live OCR**. The benchmark originals are not included because redistribution permission was not confirmed for all source images.
